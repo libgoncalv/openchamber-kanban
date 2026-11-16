@@ -16,13 +16,14 @@ import { sessionLinkState, worktreeLinkState, type SessionGoneReason, type Sessi
 import { sessionTitleForTask, titleForOrphanSession } from '../domain/autoTask.ts';
 import { buildBaseBranchOptions, describeWorktreeOption, hasKnownBranches, resolveTaskWorktree } from '../domain/worktree.ts';
 import { mountTaskDetail } from './detail.ts';
+import { createDictation } from '../host/dictation.ts';
 import { injectStyles } from './styles.ts';
 import { insertionTarget } from './dnd.ts';
 import { el } from './dom.ts';
 
 export type BoardHost = Pick<
   HostClient,
-  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'serviceRequest' | 'toast' | 'setBadge'
+  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'serviceRequest' | 'toast' | 'setBadge' | 'openMicrophone'
 >;
 
 /**
@@ -38,9 +39,15 @@ const EXTENSION_ID = 'kanban-board';
 /** Never dereferenced by the host; only shown as this task's chip link. */
 const taskUrl = (id: string) => `https://kanban.local/tasks/${id}`;
 
-export const mountKanbanBoard = (host: BoardHost, root: Element) => {
+export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { microphoneSupported?: boolean }) => {
   injectStyles();
   root.replaceChildren();
+
+  // Voice dictation for the description field (mic feature gate comes from the
+  // host's ready context; no microphone offer, no mic button). One controller
+  // per board mount; it closes the microphone whenever its detail dialog
+  // unmounts, which keeps the capture scoped to one open popup.
+  const dictation = createDictation(host, { supported: options?.microphoneSupported === true });
 
   const page = el('div', 'kb-page');
   root.append(page);
@@ -336,6 +343,10 @@ export const mountKanbanBoard = (host: BoardHost, root: Element) => {
       task,
       projects: projects.map((p) => ({ id: p.id, name: p.name })),
       onClose: closeDetail,
+      // Voice dictation for the description field; absent when the host did
+      // not offer the microphone feature (the mic button then never renders).
+      dictation: options?.microphoneSupported ? dictation : null,
+      onToast: (message, kind) => { void host.toast({ kind, message }).catch(() => undefined); },
       onSave: async (patch) => {
         const updated = applyPatch(task, patch);
         await saveTask(host, updated);

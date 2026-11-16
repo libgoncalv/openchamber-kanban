@@ -2,7 +2,7 @@
 
 A local-first Kanban board extension for OpenChamber, built with the official `@openchamber/sdk`. All task and preference data lives in `host.storage` on the connected OpenChamber server — nothing is sent anywhere else, and no capability beyond what's listed below is used.
 
-Requires OpenChamber `>=1.24.0` — the Extensions SDK (`Settings → Extensions`, panels, pages, `host.storage`) doesn't exist in earlier versions.
+Requires OpenChamber `>=1.24.0` — the Extensions SDK (`Settings → Extensions`, panels, pages, `host.storage`) doesn't exist in earlier versions. The `microphone` capability additionally needs an OpenChamber that ships SDK 2.7.x (ready.features.microphone); on older hosts the mic button simply never renders.
 
 ## Manifest and capabilities
 
@@ -14,7 +14,7 @@ Requires OpenChamber `>=1.24.0` — the Extensions SDK (`Settings → Extensions
     "contributes": {
       "panel": { "id": "kanban-board", "name": "Kanban", "icon": "task", "entry": "panel/index.html" },
       "page": { "entry": "panel/page.html", "title": "Kanban board" },
-      "capabilities": ["sessions", "prompt"],
+      "capabilities": ["sessions", "prompt", "microphone"],
       "service": { "entry": "service/main.js", "runtime": "host", "permissions": { "exec": ["git"] } }
     }
   }
@@ -25,9 +25,10 @@ Requires OpenChamber `>=1.24.0` — the Extensions SDK (`Settings → Extensions
 |---|---|
 | `sessions` | `listProjects`/`onProjects`, `listSessions`/`onSessions`, `listWorktrees`/`onWorktrees`, `startSession`, `openSession` — reading project/session/worktree state and creating or opening sessions. |
 | `prompt` | Permits `startSession` to send its `text` field as the agent's first message. The returned `sent` value is checked because session creation can succeed without the message being delivered. |
-| `service` (auto-added by declaring `contributes.service`) | The local git-branch-reading service, see below. |
+| `microphone` | Voice dictation for the description field (`host.openMicrophone`), see "Voice dictation" below. Audio is processed on this machine only. |
+| `service` (auto-added by declaring `contributes.service`) | The local git-branch-reading and dictation service, see below. |
 
-**Capability approval is all-or-nothing.** The host's own grant endpoint (`PUT /api/guests/:id/capabilities`) accepts only the full requested list or `[]` — there is no partial grant. Installing this extension means accepting all three capabilities together; there is no way to get the Kanban board without also being asked about the local service.
+**Capability approval is all-or-nothing.** The host's own grant endpoint (`PUT /api/guests/:id/capabilities`) accepts only the full requested list or `[]` — there is no partial grant. Installing this extension means accepting all four capabilities together; there is no way to get the Kanban board without also being asked about the microphone and the local service.
 
 ## File structure
 
@@ -52,22 +53,27 @@ openchamber-kanban/
       worktreeSync.ts       # live onWorktrees watcher → worktree-deleted unlinks
       orphanSessions.ts     # live onProjects+onSessions watcher → sessions with no task yet
       branchService.ts        # calls the local git-branch service; null on any failure
+      dictation.ts            # mic capture state machine + chunked /transcribe client
     ui/
       dnd.ts            # drop-target math — pure, no DOM
       styles.ts           # CSS using the host's --oc-* theme tokens
       dom.ts                # element() helper
+      speech.ts               # resample/Int16/base64 chunk helpers — pure, no DOM
       board.ts               # the Kanban board
       detail.ts                # task detail dialog
     page.ts             # full-screen page entry (contributes.page)
     panel.ts              # rail panel entry: summary + badge
     service/
-      main.ts           # local git-branch service source (Node, not browser)
+      main.ts           # bootstrap: env, server, git + real recognizer (Node, not browser)
+      server.ts         # the loopback HTTP surface: auth, body read, route dispatch
+      transcribe.ts       # dictation routes: begin/append/finish/cancel + one-shot, clip store
+      recognizer.ts       # lazy sherpa-onnx-node singleton for the local Parakeet model
   panel/
     index.html, page.html   # HTML shells
     main.js, page.js          # esbuild IIFE output
   service/
-    main.js             # esbuild Node/ESM output of src/service/main.ts
-  test/                 # node:test unit tests for domain/, store/, host/
+    main.js             # esbuild Node/ESM output of src/service/main.ts (sherpa-onnx-node stays external)
+  test/                 # node:test unit tests for domain/, store/, host/, plus the service HTTP routes
   scripts/build.mjs      # esbuild: browser IIFE for panel/page, Node/ESM for the service
 ```
 
@@ -164,18 +170,55 @@ Clicking **Start Agent**:
 6. Clears the saved open-task preference and waits for that storage write to finish before calling `host.openSession(result.sessionId)`. The dialog therefore does not reopen when the user returns to the board.
 7. On failure (`sessionId: null`), surfaces the host's own failure reason and keeps the worktree's directory in the message rather than deleting anything.
 
-## The local git-branch service
+## The local service (git branches + voice dictation)
 
-Declared via `contributes.service` with `permissions.exec: ["git"]` — the only way to list a repository's real branches, since the SDK itself has no API for this (confirmed by enumerating every `HostClient` method).
+Declared via `contributes.service` with `permissions.exec: ["git"]` — the only way to list a repository's real branches, since the SDK itself has no API for this (confirmed by enumerating every `HostClient` method). The same process also answers the dictation routes; it runs no new external programs for that (sherpa-onnx is loaded in-process).
 
-- `src/service/main.ts`, built to `service/main.js` (Node/ESM target, not the browser build) — a small HTTP server the host spawns and proxies to on `127.0.0.1`. Every request is bearer-authenticated by the host itself; the panel never sees the token or dials the port directly.
-- Runs **exactly one command**: `git -C <directory> for-each-ref --sort=-committerdate --count=200 --format=%(refname) refs/heads refs/remotes` — read-only, most-recently-active branches first, capped at 200, for a project directory the panel already knows about (`path.isAbsolute` checked).
+- `src/service/main.ts` is a thin bootstrap (env, git implementation, real recognizer); `src/service/server.ts` builds the HTTP surface: bearer auth, `GET /health`, `GET /branches`, and the `/transcribe*` routes. Built to `service/main.js` (Node/ESM target, not the browser build) — the host spawns it and proxies to it on `127.0.0.1`; every request is bearer-authenticated by the host itself, and the panel never sees the token or dials the port directly.
+- The branch route runs **exactly one command**: `git -C <directory> for-each-ref --sort=-committerdate --count=200 --format=%(refname) refs/heads refs/remotes` — read-only, most-recently-active branches first, capped at 200, for a project directory the panel already knows about (`path.isAbsolute` checked).
 - `src/host/branchService.ts` (`fetchServiceBranches`) is best-effort: not approved, not running, a bad answer, or any other error all become `null`, never an exception the UI has to handle, because the worktree-derived fallback is a complete, working option on its own.
+
+## Voice dictation (description field)
+
+A **🎙 Dictate** button sits under the description textarea in the task detail dialog. It is rendered only when the host offers the microphone (`ready.features.microphone` from the `microphone` grant); everywhere else it does not exist, and the documented fallback — particularly in the native mobile app — is the operating system keyboard's own dictation.
+
+### Flow, tap by tap
+
+1. **First tap** — `host.openMicrophone()` runs inside the click (the frame's audio graph needs the user's gesture; the SDK creates its `AudioContext` before its first await). The guest attaches a `ScriptProcessor` graph fed by the returned `MediaStream` into a *silent* `MediaStreamDestination` (never the speakers) and starts pushing one `Float32Array` copy per callback. The button flips to **⏹ Stop and insert**, a status line shows the elapsed time, and a **Discard** button appears.
+2. **Second tap** — stops the capture immediately (`mic.close()`, so the host's red "using your microphone" indicator goes away), concatenates the chunks clamped to `MAX_CLIP_SECONDS` (120 s), and transcribes.
+3. **Transcription** — `src/ui/speech.ts` resamples to 16 kHz (box-average when the device rate divides evenly, linear interpolation otherwise), encodes Int16 PCM, base64-chunks, and streams via `serviceRequest`: `POST /transcribe/begin` → one `POST /transcribe/append` per chunk → `POST /transcribe/finish`, all carrying one clip id. The returned text is appended to the *existing description* with a single space (clamped to `DESCRIPTION_MAX` if it would overflow; the title is never touched), the field is focused, and unsaved-state marking stays consistent.
+4. **Discard / cancel / teardown** — the discard button, closing the dialog, Escape, overlay click, or the board being disposed all route to the same cancel path: the microphone is closed right away, partial audio is dropped, an in-flight upload is abandoned (a generation counter makes late completions inert) plus a best-effort `POST /transcribe/cancel` so the service frees the clip. A host-side stop (`revoked`, `device-lost`) triggers the same reset with a toast.
+5. **Errors** — denied/unsupported microphone and service failures surface as `host.toast` messages with human wording.
+
+### Service transcription routes
+
+Audio sent as base64 Int16 PCM at 16 kHz. A single request body on the wire carries at most `GUEST_REQUEST_BODY_MAX` (64 000) characters — roughly 5.7 000 base64 bytes of PCM ≈ 1.35 s of audio per chunk (`PCM_CHUNK_BYTES` = 43 200 bytes) — hence the chunked flow. The clip store accepts at most 4 concurrent clips, 120 s of audio each (the same cap the guest enforces), and expires idle clips after 5 minutes. The one-shot `POST /transcribe` remains for callers that already hold a whole short clip.
+
+| Route | Body | Answer / errors |
+|---|---|---|
+| `POST /transcribe` | `{ pcm16, sampleRate }` | `{ text }`, or 400/413/503 |
+| `POST /transcribe/begin` | `{ sampleRate }` | `{ id }`, or 400/429 |
+| `POST /transcribe/append` | `{ id, pcm16 }` | `{ samples }`, or 400/404/413 |
+| `POST /transcribe/finish` | `{ id }` | `{ text }`, or 404/503 |
+| `POST /transcribe/cancel` | `{ id }` | `{ cancelled }`, idempotent |
+
+Non-2xx answers carry `{ error: "<human-readable reason>" }`, which the dialog turns into a toast.
+
+### The recognizer
+
+- Package: `sherpa-onnx-node` 2.0.1 (with the `sherpa-onnx-linux-x64` 2.0.1 platform package carrying the native binding). Loaded **lazily on the first transcription**, never at service spawn, so `/health` stays instant and a never-used mic costs nothing. The binding stays outside the esbuild bundle (`external: ['sherpa-onnx-node']`) because it loads its own `.node` file and shared libraries at runtime.
+- Model: `~/.config/openchamber/speech-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/` (NVIDIA Parakeet TDT 0.6B v2, int8, offline NeMo transducer), **read-only** — the service never writes to it and never downloads anything. Recognizer config matches sherpa-onnx's own Parakeet example: `featConfig {sampleRate: 16000, featureDim: 80}`, `modelConfig {transducer: {encoder, decoder, joiner}, tokens, numThreads: 2, provider: 'cpu', modelType: 'nemo_transducer'}`.
+- First-use latency pays that load (~1.5 s measured on this machine); a 7 s clip decodes in ~0.5 s afterwards (RTF ≈ 0.06, two threads). A clip of the 120 s cap still finishes well inside the host's 20 s `serviceRequest` timeout once loaded.
+- If the model directory or its four files are missing, the service stays healthy and every transcribe route answers a clear 503 (`Speech model not found: …`) instead of crashing; clips of genuine silence never touch the model at all.
+
+No audio, text, or transcript ever leaves the machine: capture is the host's own microphone, upload is over the service loopback, and decoding is local ONNX.
 
 ## Known SDK limitations
 
 - **No API to list a repository's full branch set**, only `GuestWorktree.branch` per existing worktree, or the local service above.
 - **Capability approval is all-or-nothing** across the whole manifest (see above) — there's also no cross-extension service API, so a capability can't be split into its own, separately-optional package either.
+- **The microphone cannot be opened at a chosen rate.** `host.openMicrophone()` takes no arguments — the SDK builds the frame's `AudioContext` at the device's default rate (typically 48 kHz) and the host captures at that rate, so the guest downsamples to 16 kHz itself (see `src/ui/speech.ts`). The capture also reaches the guest only as a `MediaStream`, requiring the SDK's own `ScriptProcessor`-into-silent-destination pattern to pull samples.
+- **A `serviceRequest` body is capped at 64 000 characters** (`GUEST_REQUEST_BODY_MAX`) — roughly a second of 16 kHz Int16 audio per request — so longer recordings are streamed as ordered chunks through `/transcribe/begin|append|finish`. Responses may be up to 8 MB, so `{ text }` is never a problem.
 - **Chats are invisible.** A chat (a session with no project) is explicitly documented as outside any project; the `sessions` capability's methods are all scoped to registered projects. There is no SDK method to list or watch chats at all.
 - **Session auto-adoption runs only while the Kanban page is active**, plus the next time it opens. A session started from the sidebar while the board is active is adopted live; one started while the board is closed is found when the board opens again, if it meets the watermark and activity rules. A session started from a task is linked directly to its existing task instead of being adopted as another task.
 - **No way to set a worktree's folder name independently of its branch name** — `startSession`'s `{ kind: 'new', name }` sets both together.
@@ -190,7 +233,7 @@ npm install
 npm run check   # typecheck + unit tests + build panel/main.js, panel/page.js, service/main.js
 ```
 
-In OpenChamber: **Settings → Extensions → Add** → paste this folder's absolute path → approve `sessions`, `prompt`, and the local service → open **Kanban** from the Extension pages menu above the session list.
+In OpenChamber: **Settings → Extensions → Add** → paste this folder's absolute path → approve `sessions`, `prompt`, `microphone`, and the local service → open **Kanban** from the Extension pages menu above the session list. The mic button appears in a task's detail dialog only where the host actually offers the microphone (desktop/web with SDK 2.7.x); on mobile the fallback is the OS keyboard's dictation.
 
 Acceptance scenarios:
 
@@ -202,3 +245,4 @@ Acceptance scenarios:
 6. An agent finishes a turn → the task moves to Review, never to Done, until marked Done by hand.
 7. Start a session from the OpenChamber sidebar → one new task appears for it, in the column its activity implies.
 8. Start an agent from a task → only the originating task is linked to that session; no second task is adopted for the same session.
+9. Open a task's detail dialog on desktop → 🎙 Dictate → speak a sentence → Stop and insert → the sentence appears at the end of the description (title untouched), the red microphone indicator disappears the moment you stop, and a second dialog with the mic button already off starts no capture.

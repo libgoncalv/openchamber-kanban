@@ -87,6 +87,23 @@ const cleanDescription = (value: unknown) => {
   return value;
 };
 
+/**
+ * Append dictated text to the existing description with a single space
+ * separator. Never throws: the result is clamped to DESCRIPTION_MAX (with the
+ * tail cut cleanly at whitespace where possible) because a dictated clip that
+ * would overflow the limit must lose its tail, not fail the whole save.
+ */
+export const appendDictatedDescription = (existing: string, dictated: string): { description: string; clamped: boolean } => {
+  const addition = dictated.replace(/\s+/g, ' ').trim();
+  const joined = existing.trim() ? `${existing.trimEnd()} ${addition}` : addition;
+  if (joined.length <= DESCRIPTION_MAX) return { description: joined, clamped: false };
+  const room = DESCRIPTION_MAX - 3;
+  const cut = joined.slice(0, room);
+  const lastSpace = cut.lastIndexOf(' ');
+  const truncated = lastSpace > room * 0.6 ? cut.slice(0, lastSpace) : cut;
+  return { description: `${truncated.trimEnd()} …`, clamped: true };
+};
+
 const cleanWorktree = (value: unknown): TaskWorktree | null => {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'object') throw new Error('worktree must be an object');

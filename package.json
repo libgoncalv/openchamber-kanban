@@ -15,21 +15,26 @@
         "id": "kanban-board",
         "name": "Kanban",
         "icon": "task",
-        "entry": "panel/index.html"
+        "entry": "panel/index.html",
+        "mobile": true
       },
       "page": {
         "entry": "panel/page.html",
-        "title": "Kanban board"
+        "title": "Kanban board",
+        "mobile": true
       },
       "capabilities": [
         "sessions",
-        "prompt"
+        "prompt",
+        "microphone"
       ],
       "service": {
         "entry": "service/main.js",
         "runtime": "host",
         "permissions": {
-          "exec": ["git"]
+          "exec": [
+            "git"
+          ]
         }
       }
     }
@@ -41,7 +46,9 @@
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@openchamber/sdk": "2.3.2"
+    "@openchamber/sdk": "2.7.2",
+    "sherpa-onnx-linux-x64": "2.0.1",
+    "sherpa-onnx-node": "2.0.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

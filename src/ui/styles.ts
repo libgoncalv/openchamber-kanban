@@ -40,6 +40,9 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-radio-desc{font-size:12px;color:var(--oc-muted);margin-top:2px}
 .kb-banner{display:none}
 .kb-banner[data-show]{display:block}
+.kb-mic-row{margin-top:6px;align-items:center;gap:10px}
+.kb-mic-status{font-size:12px;color:var(--oc-muted)}
+.kb-mic-row [hidden]{display:none}
 [hidden]{display:none!important}
 `;
 

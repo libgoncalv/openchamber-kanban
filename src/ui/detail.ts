@@ -1,6 +1,7 @@
 import type { GuestSessionWorktree } from '@openchamber/sdk';
 import { mountBanner, mountButton, mountList, mountSelect, mountTextField, type SelectOption } from '@openchamber/sdk/ui';
-import { DESCRIPTION_MAX, STATUSES, STATUS_LABELS, TITLE_MAX, type Task, type TaskPatch } from '../domain/task.ts';
+import { appendDictatedDescription, DESCRIPTION_MAX, STATUSES, STATUS_LABELS, TITLE_MAX, type Task, type TaskPatch } from '../domain/task.ts';
+import type { DictationController } from '../host/dictation.ts';
 import {
   branchNameConflictsWithBase,
   buildSessionWorktree,
@@ -27,6 +28,10 @@ export type TaskDetailProps = {
   onStartAgent: (input: { projectId: string; worktree: GuestSessionWorktree; title: string; description: string }) => Promise<void>;
   loadSessionsForProject: (projectId: string) => Promise<SessionOption[]>;
   loadWorktreeInfo: (projectId: string) => Promise<WorktreeInfo>;
+  /** Local voice dictation for the description; null/absent hides the mic button. */
+  dictation?: DictationController | null;
+  /** Non-blocking notices (dictation results, toasts): fires host.toast. */
+  onToast?: (message: string, kind: 'info' | 'error') => void;
 };
 
 const statusOptions: SelectOption[] = STATUSES.map((id) => ({ id, label: STATUS_LABELS[id] }));
@@ -89,6 +94,71 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
     helper: 'This is what the agent sees as its first message when you start a session.',
     onChange: (value) => { description = value; markDirty(); descField.update({ value }); updateStartAgentAvailability(); },
   });
+
+  // --- Voice dictation (microphone capability) ---
+  // Only rendered when the host offered the microphone feature at ready. Tap 1
+  // records, tap 2 stops the capture and transcribes fully locally; the
+  // recognized text is appended to the existing description with a single
+  // space (never the title), and the field keeps focus. Discard drops the
+  // partial audio and closes the microphone right away.
+  let micButton: ReturnType<typeof mountButton> | null = null;
+  if (props.dictation) {
+    const dictation = props.dictation;
+    const onToast = (message: string, kind: 'info' | 'error') => props.onToast?.(message, kind);
+    const micRow = el('div', 'kb-row kb-mic-row');
+    descWrap.append(micRow);
+    const micStatus = el('span', 'kb-muted kb-mic-status');
+    micRow.append(micStatus);
+    let discardButton: { dispose: () => void } | null = null;
+    const removeDiscard = () => {
+      discardButton?.dispose();
+      discardButton = null;
+    };
+    const showIdleMic = () => {
+      micButton?.update({ label: '🎙 Dictate', disabled: false, variant: 'ghost' });
+      micStatus.textContent = '';
+      removeDiscard();
+    };
+    micButton = mountButton(micRow, {
+      label: '🎙 Dictate', variant: 'ghost', size: 'sm',
+      onClick: () => dictation.toggle({
+        onView: ({ state: micState, seconds }) => {
+          if (micState === 'recording') {
+            micButton?.update({ label: '⏹ Stop and insert', variant: 'secondary', disabled: false });
+            micStatus.textContent = `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} — stop to append what you said, or discard`;
+            if (!discardButton) discardButton = mountButton(micRow, {
+              label: 'Discard', variant: 'ghost', size: 'sm',
+              onClick: () => dictation.discard(),
+            });
+          } else if (micState === 'transcribing') {
+            micButton?.update({ label: 'Transcribing…', disabled: true });
+            micStatus.textContent = 'Transcribing locally…';
+            removeDiscard();
+          } else {
+            showIdleMic();
+          }
+        },
+        onText: (text) => {
+          removeDiscard();
+          const dictated = text.trim();
+          showIdleMic();
+          if (!dictated) {
+            onToast('Dictation returned no text — nothing was appended.', 'info');
+            return;
+          }
+          const { description: next, clamped } = appendDictatedDescription(description, dictated);
+          description = next;
+          descField.update({ value: next });
+          markDirty();
+          updateStartAgentAvailability();
+          if (clamped) onToast(`Description reached its ${DESCRIPTION_MAX}-character limit; the dictated text was cut to fit.`, 'info');
+          // The appended text is immediately editable where it landed.
+          descWrap.querySelector('textarea')?.focus();
+        },
+        onNotice: (body, kind) => onToast(body, kind),
+      }),
+    });
+  }
   const statusWrap = el('div'); grid.append(statusWrap);
   const statusField = mountSelect(statusWrap, {
     label: 'Status', value: status, options: statusOptions,
@@ -365,6 +435,14 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   });
   mountButton(footer, { label: 'Close', variant: 'outline', onClick: () => props.onClose() });
 
-  const dispose = () => { document.removeEventListener('keydown', onKeydown); overlay.remove(); };
+  const dispose = () => {
+    // Dropping the dialog (save, close, Escape, overlay click, board dispose)
+    // must always stop a running capture: the host shows a red
+    // "using your microphone" indicator for as long as it's open. discard()
+    // also cancels any transcription still in flight.
+    props.dictation?.dispose();
+    document.removeEventListener('keydown', onKeydown);
+    overlay.remove();
+  };
   return { dispose };
 };
