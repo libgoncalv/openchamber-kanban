@@ -18,6 +18,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 - Start a session from a task on this board, and it stays linked to that task. It does not create another task. Start a session from the OpenChamber sidebar, and the board can add a new task for it automatically, as described below.
 - Delete a session in the OpenChamber sidebar — the linked task is deleted automatically. Archive a session, or delete a worktree — the corresponding link is cleared and the task stays on the board. You can start a new agent for it, or link another session.
 - Move a task to any column three ways: drag the card, the ⋯ menu on it, or open the task and click the status you want in its Status strip. One click for every column, and the click moves immediately — the same deliberate move the other two make. The ⋯ menu exists on every card on the page.
+- Each column carries its theme accent — gray Backlog, a held-back blue To Do, the same blue at full strength In Progress, amber Review, green Done — as a small strip above the header and the count's tint. The blue family is one color at two strengths (planned vs working); the color is display language on the column head only: cards keep their own (the agent pill, the amber unseen border).
 
 
 
@@ -29,7 +30,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 
 ### The sidebar panel is a display mirror, filtered to your project
 
-The narrow Kanban panel next to your session list shows the same board laid out for a narrow column, locked to the project OpenChamber currently has open. The same five columns appear stacked from top to bottom, each header showing its count. On the full page the scope is a filter you can change; here it follows the open project.
+The narrow Kanban panel next to your session list shows the same board laid out for a narrow column, locked to the project OpenChamber currently has open. The same five columns appear stacked from top to bottom, each header showing its count and carrying its column's colored strip, exactly like the full page. On the full page the scope is a filter you can change; here it follows the open project.
 
 A "Project: …" line under the header names the focused project. When no project is open, every task shows, with the project named on each row.
 

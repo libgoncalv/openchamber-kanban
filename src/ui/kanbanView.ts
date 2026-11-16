@@ -306,6 +306,9 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
 
   const renderSection = (status: TaskStatus, items: BoardItem[]) => {
     const section = el('div', 'kb-psec');
+    // Same dataset the page's columns carry: the column-color CSS keys both
+    // surfaces off it, so they can never drift apart on the tints.
+    section.dataset.status = status;
     // A surface that folds (the interactive page/rail pair until now) renders
     // the head as a toggle button; one that passes no toggle renders a plain
     // label — and never hides rows it cannot bring back.

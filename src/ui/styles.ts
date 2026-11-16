@@ -6,7 +6,7 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .kb-toolbar .grow{flex:1;min-width:160px}
 .kb-columns{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding-bottom:8px;flex:1}
-.kb-column{flex:1 0 220px;min-width:220px;max-width:320px;display:flex;flex-direction:column;background:var(--oc-muted-surface);border:1px solid var(--oc-border);border-radius:var(--oc-radius,10px);min-height:120px}
+.kb-column{flex:1 0 220px;min-width:220px;max-width:320px;display:flex;flex-direction:column;background:var(--oc-muted-surface);border:1px solid var(--oc-border);border-radius:var(--oc-radius,10px);min-height:120px;overflow:hidden}
 .kb-column.kb-dragover{outline:2px solid var(--oc-focus);outline-offset:-2px}
 .kb-column-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--oc-border)}
 .kb-column-title{font-weight:600;font-size:12px;letter-spacing:.02em;text-transform:uppercase;color:var(--oc-muted)}
@@ -110,6 +110,30 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-psec-name{flex:1;min-width:0;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--oc-muted)}
 .kb-psec-count{font:11px var(--oc-mono);color:var(--oc-muted);background:var(--oc-muted-surface);padding:2px 7px;border-radius:9999px}
 .kb-psec-count[data-attn]{color:var(--oc-warning,#e5a234);background:color-mix(in srgb,var(--oc-warning,#e5a234) 14%,transparent)}
+/* One theme token per column (the renderer sets data-status on both surfaces):
+   a 3px strip above the head, the title, and the count pill take the column's
+   accent; bodies stay neutral — attention borders, agent pills and drag-over
+   outlines keep their hues to themselves. Backlog muted, Review warning, Done
+   success, and the blue family owns everything agent-engaged: To Do = the info
+   blue held back, In Progress = the same blue at full strength. The theme's
+   brand primary is deliberately out of the palette here — in real host themes
+   it can sit anywhere on the wheel (seen: right next to the amber), so no
+   column may depend on it to stay distinct. */
+.kb-column,.kb-psec{--kb-accent:var(--oc-muted,#9a9ba6)}
+.kb-column[data-status="todo"],.kb-psec[data-status="todo"]{--kb-accent:var(--oc-info,#5b9cf6)}
+.kb-column[data-status="in_progress"],.kb-psec[data-status="in_progress"]{--kb-accent:var(--oc-info,#5b9cf6)}
+.kb-column[data-status="review"],.kb-psec[data-status="review"]{--kb-accent:var(--oc-warning,#e5a234)}
+.kb-column[data-status="done"],.kb-psec[data-status="done"]{--kb-accent:var(--oc-success,var(--status-success,#46a758))}
+.kb-column::before,.kb-psec::before{content:"";display:block;height:3px;flex:none;background:var(--kb-accent)}
+.kb-column-title,.kb-psec-name{color:var(--kb-accent)}
+.kb-column-count{font:11px var(--oc-mono);color:var(--kb-accent);background:color-mix(in srgb,var(--kb-accent) 12%,transparent);padding:1px 7px;border-radius:9999px}
+.kb-psec-count{font:11px var(--oc-mono);color:var(--kb-accent);background:color-mix(in srgb,var(--kb-accent) 12%,transparent);padding:2px 7px;border-radius:9999px}
+/* To Do reads as the In Progress family at lower strength — planned vs
+   working. Faded strip, dimmer title, lighter count tint; the attention
+   rules above still outrank these wherever a count flags unseen. */
+.kb-column[data-status="todo"]::before,.kb-psec[data-status="todo"]::before{background:color-mix(in srgb,var(--kb-accent) 45%,transparent)}
+.kb-column[data-status="todo"] .kb-column-title,.kb-psec[data-status="todo"] .kb-psec-name{color:color-mix(in srgb,var(--kb-accent) 72%,transparent)}
+.kb-column[data-status="todo"] .kb-column-count,.kb-psec[data-status="todo"] .kb-psec-count{background:color-mix(in srgb,var(--kb-accent) 9%,transparent)}
 .kb-psec-body{display:flex;flex-direction:column;gap:6px;padding:2px 0 10px}
 /* Display-only rows: the same look the page's cards read well in, minus every interaction affordance. */
 .kb-panel-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:8px}
