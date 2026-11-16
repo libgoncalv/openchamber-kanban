@@ -105,11 +105,24 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-panel-btn-primary:hover{filter:brightness(1.08)}
 .kb-rail-foot{display:flex;align-items:center;gap:10px;justify-content:space-between}
 .kb-rail-foot p{margin:0}
+/* Quick add: one field, Enter creates a real task in Backlog. */
+.kb-quickadd{display:block;width:100%;padding:7px 10px;font:inherit;font-size:13px;color:var(--oc-fg);background:var(--oc-elevated);border:1px solid var(--oc-border);border-radius:8px}
+.kb-quickadd::placeholder{color:var(--oc-muted)}
+.kb-quickadd:focus{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+/* Drag states, mirroring the board's column highlight and dragging card. */
+.kb-psec.kb-dragover{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+.kb-panel-row.kb-dragging{opacity:.4}
+.kb-panel-empty{font-size:12px;color:var(--oc-muted);padding:4px 2px}
+/* Row menu: hover-revealed on pointer devices, always visible under a finger. */
+.kb-panel-menu{flex:none;opacity:0;transition:opacity 120ms ease-out}
+.kb-panel-row:hover .kb-panel-menu,.kb-panel-row:focus-within .kb-panel-menu{opacity:1}
 /* Under a finger the panel rows and actions reach the app's touch sizes. */
 @media (pointer: coarse){
   .kb-psec-head{min-height:36px}
   .kb-panel-row{min-height:44px}
   .kb-panel-btn{padding:8px 12px}
+  .kb-panel-menu{opacity:1}
+  .kb-quickadd{height:40px}
 }
 [hidden]{display:none!important}
 `;

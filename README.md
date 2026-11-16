@@ -35,7 +35,9 @@ Each task is a slim row: its title, its project, and one live line about the age
 
 The panel shows the project OpenChamber currently has open. A "Project: …" line under the header says which one; tasks of other projects wait on the full board. When no project is open, every task shows again, with the project named on each row.
 
-The panel follows agents in real time. If an agent finishes while the full board is closed, the row already sits under Review with a small "→ Review" tag. The panel itself never saves these agent moves — the full board stays the one place that writes them down the next time you open it. The only saves the panel ever makes are the things you click: **Mark done**, and clearing the unseen flag when you open a chat.
+The panel follows agents in real time. If an agent finishes while the full board is closed, the row already sits under Review with a small "→ Review" tag. The panel itself never saves these agent moves — the full board stays the one place that writes them down the next time you open it. What it does save are your own actions: quick-added tasks, drag and menu moves, **Mark done**, deletes, and clearing the unseen flag when you open a chat.
+
+You can also use the panel as a board, not just a summary. Type a title into **Quick add** and press Enter — a real task is created right away in Backlog, in the project currently open. Drag a row onto another column to move it (drop it on a folded column's header to add it at the end; drags reuse the full board's ordering rules), or open the ⋯ menu on a row and pick a **Move to** action without dragging. Deleting is in the same menu, shown in red; if the task had a linked agent chat, it will not come back as an automatic new card afterwards.
 
 ### The Review column moves on its own
 
