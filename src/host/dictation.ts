@@ -10,7 +10,7 @@
 // drops the partial audio. Work abandoned mid-flight (discard, dispose) never
 // publishes: a generation counter makes stale continuations inert.
 import type { GuestMicrophone, GuestMicrophoneEndReason, HostClient } from '@openchamber/sdk';
-import { MAX_CLIP_SECONDS, TARGET_SAMPLE_RATE, prepareClipChunks } from '../ui/speech.ts';
+import { MAX_CLIP_SECONDS, TARGET_SAMPLE_RATE, levelFromSamples, prepareClipChunks } from '../ui/speech.ts';
 
 export type DictationState = 'idle' | 'recording' | 'transcribing';
 
@@ -33,6 +33,12 @@ export type DictationController = {
   readonly state: DictationState;
   /** Begin recording (idle) or stop recording and transcribe (recording). */
   toggle: (handlers: DictationHandlers) => void;
+  /**
+   * Live microphone loudness (0..1, OpenChamber's RMS metering), published per
+   * capture buffer while a recording runs; 0 once it stops. Subscribers come
+   * and go freely — the panel's level bars are the first one.
+   */
+  subscribeLevel: (callback: (level: number) => void) => () => void;
   /** Drop whatever is in progress and close the microphone. */
   discard: () => void;
   dispose: () => void;
@@ -117,8 +123,13 @@ export const createDictation = (host: DictationHost, options: { supported: boole
   let capture: Capture | null = null;
   let chunks: Float32Array[] = [];
   let transcribeClipId: string | null = null;
+  const levelSubscribers = new Set<(level: number) => void>();
 
   const seconds = () => (capture === null ? 0 : Math.floor((Date.now() - capture.startedAt) / 1000));
+
+  const publishLevel = (level: number): void => {
+    for (const callback of levelSubscribers) callback(level);
+  };
 
   const publish = () => {
     handlers?.onView({ state, seconds: seconds() });
@@ -147,6 +158,8 @@ export const createDictation = (host: DictationHost, options: { supported: boole
     active.mic.close();
     active.removeEnded();
     void active.context.close().catch(() => undefined);
+    // The meter bars must not stand at their last value once capture is gone.
+    publishLevel(0);
   };
 
   /** Concatenate the captured chunks, clamped to the record cap. */
@@ -237,7 +250,9 @@ export const createDictation = (host: DictationHost, options: { supported: boole
     processor.onaudioprocess = (event) => {
       // Web Audio reuses the channel buffer, so a copy per callback. The
       // callback stops before any state transition clears `chunks`.
-      chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      const data = event.inputBuffer.getChannelData(0);
+      chunks.push(new Float32Array(data));
+      publishLevel(levelFromSamples(data));
     };
     source.connect(processor);
     processor.connect(destination);
@@ -306,6 +321,12 @@ export const createDictation = (host: DictationHost, options: { supported: boole
       return state;
     },
     toggle,
+    subscribeLevel: (callback) => {
+      levelSubscribers.add(callback);
+      return () => {
+        levelSubscribers.delete(callback);
+      };
+    },
     discard,
     dispose,
   };

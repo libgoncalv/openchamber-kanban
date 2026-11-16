@@ -22,6 +22,23 @@ export const PCM_CHUNK_BYTES = 43_200;
 export const MAX_CLIP_SECONDS = 120;
 
 /**
+ * A 0..1 loudness level for mono samples, metered the way OpenChamber's own
+ * dictation capture does it: root mean square scaled by 2 and clamped, so
+ * quiet speech lands around 0.1 and normal speech around 0.3–0.6. Feeds the
+ * recording panel's live bars; pure math so it stays testable in node.
+ */
+export const levelFromSamples = (samples: Float32Array): number => {
+  if (samples.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const sample = samples[i] ?? 0;
+    sum += sample * sample;
+  }
+  const rms = Math.sqrt(sum / samples.length);
+  return Math.min(1, Math.max(0, rms * 2));
+};
+
+/**
  * Downsample (or resample) mono samples to `target`. When the rates divide
  * evenly (48 kHz → 16 kHz) the samples in each box are averaged, which acts
  * as a cheap low-pass against aliasing; otherwise falls back to linear

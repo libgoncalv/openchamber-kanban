@@ -2,6 +2,7 @@ import type { GuestSessionWorktree } from '@openchamber/sdk';
 import { mountBanner, mountButton, mountList, mountSelect, mountTextField, type SelectOption } from '@openchamber/sdk/ui';
 import { appendDictatedDescription, DESCRIPTION_MAX, STATUSES, STATUS_LABELS, TITLE_MAX, type Task, type TaskPatch } from '../domain/task.ts';
 import type { DictationController } from '../host/dictation.ts';
+import { mountDictationPanel, type DictationPanel } from './dictationPanel.ts';
 import {
   branchNameConflictsWithBase,
   buildSessionWorktree,
@@ -45,7 +46,17 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   overlay.append(dialog);
   root.append(overlay);
 
-  const onKeydown = (event: KeyboardEvent) => { if (event.key === 'Escape') props.onClose(); };
+  const onKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return;
+    // While dictation is active, Escape belongs to it: a recording is
+    // discarded, transcription keeps running (its panel has a Cancel action),
+    // and the task dialog stays open.
+    if (props.dictation && props.dictation.state !== 'idle') {
+      if (props.dictation.state === 'recording') props.dictation.discard();
+      return;
+    }
+    props.onClose();
+  };
   overlay.addEventListener('click', (event) => { if (event.target === overlay) props.onClose(); });
   document.addEventListener('keydown', onKeydown);
 
@@ -96,68 +107,35 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   });
 
   // --- Voice dictation (microphone capability) ---
-  // Only rendered when the host offered the microphone feature at ready. Tap 1
-  // records, tap 2 stops the capture and transcribes fully locally; the
+  // Only rendered when the host offered the microphone feature at ready. The
+  // panel (OpenChamber's dictation look) holds all interaction: tap "Dictate"
+  // to record, ✓ stops the capture and transcribes fully locally; the
   // recognized text is appended to the existing description with a single
-  // space (never the title), and the field keeps focus. Discard drops the
-  // partial audio and closes the microphone right away.
-  let micButton: ReturnType<typeof mountButton> | null = null;
+  // space (never the title), and the field keeps focus. Discard/Cancel drops
+  // the partial audio (or a running transcription) and closes the microphone.
+  // The controller is per board mount, the panel per dialog — release it here.
+  let disposeDictationPanel: (() => void) | null = null;
   if (props.dictation) {
-    const dictation = props.dictation;
     const onToast = (message: string, kind: 'info' | 'error') => props.onToast?.(message, kind);
-    const micRow = el('div', 'kb-row kb-mic-row');
-    descWrap.append(micRow);
-    const micStatus = el('span', 'kb-muted kb-mic-status');
-    micRow.append(micStatus);
-    let discardButton: { dispose: () => void } | null = null;
-    const removeDiscard = () => {
-      discardButton?.dispose();
-      discardButton = null;
-    };
-    const showIdleMic = () => {
-      micButton?.update({ label: '🎙 Dictate', disabled: false, variant: 'ghost' });
-      micStatus.textContent = '';
-      removeDiscard();
-    };
-    micButton = mountButton(micRow, {
-      label: '🎙 Dictate', variant: 'ghost', size: 'sm',
-      onClick: () => dictation.toggle({
-        onView: ({ state: micState, seconds }) => {
-          if (micState === 'recording') {
-            micButton?.update({ label: '⏹ Stop and insert', variant: 'secondary', disabled: false });
-            micStatus.textContent = `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} — stop to append what you said, or discard`;
-            if (!discardButton) discardButton = mountButton(micRow, {
-              label: 'Discard', variant: 'ghost', size: 'sm',
-              onClick: () => dictation.discard(),
-            });
-          } else if (micState === 'transcribing') {
-            micButton?.update({ label: 'Transcribing…', disabled: true });
-            micStatus.textContent = 'Transcribing locally…';
-            removeDiscard();
-          } else {
-            showIdleMic();
-          }
-        },
-        onText: (text) => {
-          removeDiscard();
-          const dictated = text.trim();
-          showIdleMic();
-          if (!dictated) {
-            onToast('Dictation returned no text — nothing was appended.', 'info');
-            return;
-          }
-          const { description: next, clamped } = appendDictatedDescription(description, dictated);
-          description = next;
-          descField.update({ value: next });
-          markDirty();
-          updateStartAgentAvailability();
-          if (clamped) onToast(`Description reached its ${DESCRIPTION_MAX}-character limit; the dictated text was cut to fit.`, 'info');
-          // The appended text is immediately editable where it landed.
-          descWrap.querySelector('textarea')?.focus();
-        },
-        onNotice: (body, kind) => onToast(body, kind),
-      }),
-    });
+    disposeDictationPanel = mountDictationPanel(descWrap, {
+      dictation: props.dictation,
+      onText: (text) => {
+        const dictated = text.trim();
+        if (!dictated) {
+          onToast('Dictation returned no text — nothing was appended.', 'info');
+          return;
+        }
+        const { description: next, clamped } = appendDictatedDescription(description, dictated);
+        description = next;
+        descField.update({ value: next });
+        markDirty();
+        updateStartAgentAvailability();
+        if (clamped) onToast(`Description reached its ${DESCRIPTION_MAX}-character limit; the dictated text was cut to fit.`, 'info');
+        // The appended text is immediately editable where it landed.
+        descWrap.querySelector('textarea')?.focus();
+      },
+      onNotice: (body, kind) => onToast(body, kind),
+    }).dispose;
   }
   const statusWrap = el('div'); grid.append(statusWrap);
   const statusField = mountSelect(statusWrap, {
@@ -439,7 +417,9 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
     // Dropping the dialog (save, close, Escape, overlay click, board dispose)
     // must always stop a running capture: the host shows a red
     // "using your microphone" indicator for as long as it's open. discard()
-    // also cancels any transcription still in flight.
+    // also cancels any transcription still in flight. The panel goes first so
+    // its level subscription and meter loop never outlive this dialog mount.
+    disposeDictationPanel?.();
     props.dictation?.dispose();
     document.removeEventListener('keydown', onKeydown);
     overlay.remove();

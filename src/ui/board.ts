@@ -590,20 +590,15 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     const card = el('div', task.needsAttentionSince !== null ? 'kb-card kb-card-needs-attention' : 'kb-card');
     card.draggable = true;
     card.dataset.id = task.id;
-    const titleRow = el('div', 'kb-row between');
-    titleRow.append(el('div', 'kb-card-title', task.title));
-    mountButton(titleRow, { label: 'Edit', variant: 'ghost', size: 'xs', onClick: () => openDetail(task.id) });
-    card.append(titleRow);
+    card.append(el('div', 'kb-card-title', task.title));
     const meta = el('div', 'kb-card-meta');
     const project = task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? task.projectId : null;
     if (project) meta.append(el('span', 'kb-muted', project));
     if (task.sessionId) meta.append(el('span', 'kb-mono', `session:${task.sessionId.slice(0, 8)}`));
     card.append(meta);
     if (!task.sessionId) card.append(el('p', 'kb-muted', 'No session yet — click to start an agent or link one.'));
-    card.addEventListener('click', (event) => {
-      // The Edit button already handled its own click; don't also act on the card underneath it.
-      if ((event.target as HTMLElement).closest('button')) return;
-      if (task.sessionId) { markReviewed(task); void host.openSession(task.sessionId).catch(notify); return; }
+    card.addEventListener('click', () => {
+      // A click anywhere on the card opens its detail — never the linked session directly.
       openDetail(task.id);
     });
     card.addEventListener('dragstart', (event) => {

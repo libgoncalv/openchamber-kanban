@@ -40,9 +40,30 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-radio-desc{font-size:12px;color:var(--oc-muted);margin-top:2px}
 .kb-banner{display:none}
 .kb-banner[data-show]{display:block}
-.kb-mic-row{margin-top:6px;align-items:center;gap:10px}
-.kb-mic-status{font-size:12px;color:var(--oc-muted)}
-.kb-mic-row [hidden]{display:none}
+// Dictation panel (OpenChamber's composer dictation look, adapted to this
+// dialog): trigger with the app's mic icon; active states in a bordered card
+// with the status line, a pulsing red dot, the live level bars, the duration
+// and compact icon actions.
+.kb-dictation{margin-top:6px;display:flex;flex-direction:column;gap:8px}
+.kb-dict-trigger{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;padding:6px 11px;font:inherit;font-size:13px;color:var(--oc-fg);background:transparent;border:1px solid var(--oc-border);border-radius:calc(var(--oc-radius,10px) - 3px);cursor:pointer}
+.kb-dict-trigger svg{width:15px;height:15px}
+.kb-dict-trigger:hover{background:var(--oc-hover)}
+.kb-dict-panel{border:1px solid var(--oc-border);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:var(--oc-elevated);color:var(--oc-elevated-fg)}
+.kb-dict-status{font-size:13px;color:var(--oc-muted)}
+.kb-dict-controls{display:flex;align-items:center;gap:10px;min-height:20px}
+.kb-dict-dot{width:6px;height:6px;border-radius:99px;background:var(--status-error,var(--oc-error,#e5484d));flex:none;animation:kb-dot-pulse 1.4s ease-in-out infinite}
+@keyframes kb-dot-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.kb-dict-bars{height:18px;flex:1;min-width:0;display:block;color:var(--oc-muted)}
+.kb-dict-timer{font:12px var(--oc-mono);font-variant-numeric:tabular-nums;color:var(--oc-muted);flex:none}
+.kb-dict-actions{display:flex;gap:6px;flex:none}
+.kb-dict-iconbtn{width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--oc-muted);border:1px solid var(--oc-border);border-radius:calc(var(--oc-radius,10px) - 3px);cursor:pointer}
+.kb-dict-iconbtn svg{width:14px;height:14px}
+.kb-dict-iconbtn:hover{color:var(--oc-fg)}
+.kb-dict-iconbtn:disabled{opacity:.5;cursor:default}
+.kb-dict-iconbtn[data-primary="true"]{background:var(--oc-primary);color:var(--oc-primary-fg,#fff);border-color:transparent}
+.kb-dict-iconbtn[data-primary="true"]:hover{color:var(--oc-primary-fg,#fff)}
+.kb-dict-spin{width:14px;height:14px;flex:none;border:2px solid var(--oc-border);border-top-color:var(--oc-muted);border-radius:99px;animation:kb-spin 1s linear infinite}
+@keyframes kb-spin{to{transform:rotate(360deg)}}
 [hidden]{display:none!important}
 `;
 

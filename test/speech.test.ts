@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { GUEST_REQUEST_BODY_MAX } from '@openchamber/sdk';
 import {
   float32ToPcm16,
+  levelFromSamples,
   maxChunkBodyChars,
   pcm16ChunkedBase64,
   prepareClipChunks,
@@ -93,4 +94,14 @@ test('prepareClipChunks downsamples to 16 kHz before encoding', () => {
   // An already-16 kHz clip does not change sample count.
   const same = prepareClipChunks(new Float32Array(8000), 16000);
   assert.equal(Buffer.from(same.chunks[0]!, 'base64').length / 2, 8000);
+});
+
+test('levelFromSamples meters RMS like OpenChamber (×2, clamped to 0..1)', () => {
+  assert.equal(levelFromSamples(new Float32Array(0)), 0);
+  assert.equal(levelFromSamples(new Float32Array(1000)), 0); // silence
+  // A constant 0.25 signal has rms 0.25 → level 0.5.
+  assert.ok(Math.abs(levelFromSamples(new Float32Array(1000).fill(0.25)) - 0.5) < 1e-9);
+  // Full-scale and half-scale noise both clamp at the top.
+  assert.equal(levelFromSamples(new Float32Array(1000).fill(1)), 1);
+  assert.equal(levelFromSamples(new Float32Array(1000).fill(0.75)), 1);
 });
