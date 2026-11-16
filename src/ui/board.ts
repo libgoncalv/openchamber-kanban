@@ -25,7 +25,7 @@ import { el } from './dom.ts';
 
 export type BoardHost = Pick<
   HostClient,
-  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'serviceRequest' | 'toast' | 'setBadge' | 'openMicrophone'
+  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'serviceRequest' | 'toast' | 'openMicrophone'
 >;
 
 /**
@@ -392,14 +392,13 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   };
 
   const updateBadge = (sections: BoardSections) => {
-    // The mounted badge describes what is on screen; the extension-tab badge
-    // counts open tasks board-wide, the same signal from either surface.
+    // The mounted badge describes what is on screen. The extension-tab rail
+    // icon carries no number on purpose: the panel is display-only and no
+    // surface should make it look like a counter (host.setBadge unused).
     const open = countOpen(sections);
     const unseen = countUnseen(sections);
     const counts = badgeForCounts(open, unseen);
     badge.update({ label: counts.label, tone: counts.tone });
-    const openAll = tasks.filter((task) => task.status !== 'done').length;
-    void host.setBadge(openAll || null).catch(() => undefined);
   };
 
   const render = () => {

@@ -7,7 +7,6 @@ import { DISMISSED_SESSIONS_KEY, loadDismissedSessions } from '../src/store/dism
 import {
   createBacklogTask,
   deleteTaskWithDismissal,
-  moveTaskToEnd,
   patchTask,
   planMove,
   saveMove,
@@ -74,18 +73,6 @@ test('saveMove persists the moved record and every rebalanced one', async () => 
     tasks.filter((t) => t.id === moved.id || t.id === x.id || t.id === y.id).map((t) => t.id).sort(),
     [moved.id, x.id, y.id].sort(),
   );
-});
-
-test('moveTaskToEnd appends the column-wide last rank and clears the marker; repeated drops are no-ops', () => {
-  const moved = task('m', 1, 'todo', { needsAttentionSince: 50 });
-  const tail = task('t', 10_000, 'todo');
-  const { next, changed } = moveTaskToEnd([moved, tail], moved.id, 'todo');
-  assert.equal(changed, true);
-  assert.equal(next.find((t) => t.id === moved.id)?.rank, 10_000 + 1024);
-  assert.equal(next.find((t) => t.id === moved.id)?.needsAttentionSince, null);
-  const again = moveTaskToEnd(next, moved.id, 'todo');
-  assert.equal(again.changed, true, 'a repeat drop still appends past the column end (same semantics as ever)');
-  assert.equal(again.next.find((t) => t.id === moved.id)?.rank, 11_024 + 1024);
 });
 
 test('statusMove keeps rank, clears the marker, and is null when nothing changes', () => {

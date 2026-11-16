@@ -5,14 +5,14 @@ import { deleteTask, saveTask } from './taskStore.ts';
 import { saveDismissedSessions } from './dismissedSessions.ts';
 
 /**
- * The write operations both surfaces shared until now as two duplicated
- * implementations. The full-screen page and the rail panel run the exact
- * same math and the exact same save/rollback discipline here, so their
- * orderings can never diverge. Callers commit the returned arrays to their
- * own state (`setTasks`/`tasks =`) and render; saves throw so each surface
- * can notify its own way and fall back to a reload. Nothing here touches
- * the DOM, and nothing here is agent-driven state — these are deliberate
- * user actions only.
+ * The write operations behind the full-screen board page: quick-created
+ * tasks, drag-and-drop moves, menu moves, status changes, and deletes.
+ * Orderings and the save/rollback discipline live in exactly one place, so
+ * they can never diverge from what the rail panel merely displays. Callers
+ * commit the returned arrays to their own state (`setTasks`) and render;
+ * saves throw so the page can notify its own way and fall back to a reload.
+ * Nothing here touches the DOM, and nothing here is agent-driven state —
+ * these are deliberate user actions only, and only the page runs them.
  */
 type Storage = Pick<HostClient, 'storage'>;
 
@@ -47,25 +47,6 @@ export const planMove = (
 export const saveMove = async (host: Storage, next: readonly Task[], id: string, plan: DropPlan): Promise<void> => {
   await saveTask(host, next.find((task) => task.id === id)!);
   await Promise.all(plan.rebalance.map((entry) => saveTask(host, next.find((task) => task.id === entry.id)!)));
-};
-
-/**
- * A drop on a collapsible section header (included for a folded one) or any
- * "append at the column's end" move: the rank at the very end of that
- * column across all tasks. `changed` false when this would change nothing.
- */
-export const moveTaskToEnd = (
-  tasks: readonly Task[],
-  id: string,
-  status: TaskStatus,
-): { next: Task[]; changed: boolean } => {
-  const current = tasks.find((task) => task.id === id);
-  const endRank = rankAtEnd(tasks, status);
-  if (!current || (current.status === status && current.needsAttentionSince === null && current.rank === endRank)) {
-    return { next: [...tasks], changed: false };
-  }
-  const updated = applyPatch(current, { status, rank: endRank, needsAttentionSince: null });
-  return { next: tasks.map((task) => (task.id === id ? updated : task)), changed: true };
 };
 
 /**

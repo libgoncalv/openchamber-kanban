@@ -87,18 +87,15 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-panel-sections{display:flex;flex-direction:column}
 .kb-psec{display:flex;flex-direction:column}
 .kb-psec+.kb-psec{border-top:1px solid var(--oc-border)}
-.kb-psec-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 2px;background:none;border:0;font:inherit;cursor:pointer;text-align:left}
-.kb-psec-head:hover .kb-psec-name{color:var(--oc-fg)}
+/* The section heads are plain labels — the display-only mirror has no fold, no menu, no drop targets. */
+.kb-psec-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 2px}
 .kb-psec-name{flex:1;min-width:0;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--oc-muted)}
 .kb-psec-count{font:11px var(--oc-mono);color:var(--oc-muted);background:var(--oc-muted-surface);padding:2px 7px;border-radius:9999px}
 .kb-psec-count[data-attn]{color:var(--oc-warning,#e5a234);background:color-mix(in srgb,var(--oc-warning,#e5a234) 14%,transparent)}
-.kb-psec-chevron{width:12px;flex:none;text-align:center;font-size:10px;color:var(--oc-muted)}
 .kb-psec-body{display:flex;flex-direction:column;gap:6px;padding:2px 0 10px}
-.kb-panel-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:8px;cursor:pointer}
-.kb-panel-row:hover{border-color:var(--oc-hover)}
-.kb-panel-row:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+/* Display-only rows: the same look the page's cards read well in, minus every interaction affordance. */
+.kb-panel-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:8px}
 .kb-panel-row.kb-attn{border-color:var(--oc-warning,#e5a234);border-left-width:3px}
-.kb-panel-row.kb-attn:hover{border-color:var(--oc-warning,#e5a234)}
 .kb-panel-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
 .kb-panel-title{font-weight:550;font-size:13px;overflow-wrap:anywhere}
 .kb-panel-sub{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--oc-muted);min-width:0}
@@ -111,31 +108,16 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 @keyframes kb-panel-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .kb-panel-live{white-space:nowrap}
 .kb-panel-chip{flex:none;font-size:10px;font-weight:500;color:var(--oc-warning,#e5a234);background:color-mix(in srgb,var(--oc-warning,#e5a234) 13%,transparent);padding:1px 6px;border-radius:9999px}
-.kb-panel-actions{display:flex;gap:6px;margin-top:2px}
-.kb-panel-btn{font:inherit;font-size:11px;padding:3px 9px;border-radius:6px;background:transparent;color:var(--oc-fg);border:1px solid var(--oc-border);cursor:pointer}
-.kb-panel-btn:hover{background:var(--oc-hover)}
-.kb-panel-btn-primary{background:var(--oc-primary);color:var(--oc-primary-fg,#fff);border-color:transparent}
-.kb-panel-btn-primary:hover{filter:brightness(1.08)}
 .kb-rail-foot{display:flex;align-items:center;gap:10px;justify-content:space-between}
 .kb-rail-foot p{margin:0}
-/* Quick add: one field, Enter creates a real task in Backlog. */
-.kb-quickadd{display:block;width:100%;padding:7px 10px;font:inherit;font-size:13px;color:var(--oc-fg);background:var(--oc-elevated);border:1px solid var(--oc-border);border-radius:8px}
-.kb-quickadd::placeholder{color:var(--oc-muted)}
-.kb-quickadd:focus{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
-/* Drag states, mirroring the board's column highlight and dragging card. */
-.kb-psec.kb-dragover{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
-.kb-panel-row.kb-dragging{opacity:.4}
 .kb-panel-empty{font-size:12px;color:var(--oc-muted);padding:4px 2px}
-/* Row menu: hover-revealed on pointer devices, always visible under a finger. */
+/* The ⋯ menu slot lives inside page cards; the page reveals it on hover/focus (rule above), coarse pointers always. */
 .kb-panel-menu{flex:none;opacity:0;transition:opacity 120ms ease-out}
-.kb-panel-row:hover .kb-panel-menu,.kb-panel-row:focus-within .kb-panel-menu{opacity:1}
-/* Under a finger the panel rows and actions reach the app's touch sizes. */
+/* Under a finger the rows reach the app's touch size; menus always show. */
 @media (pointer: coarse){
   .kb-psec-head{min-height:36px}
   .kb-panel-row{min-height:44px}
-  .kb-panel-btn{padding:8px 12px}
   .kb-panel-menu{opacity:1}
-  .kb-quickadd{height:40px}
 }
 [hidden]{display:none!important}
 `;
