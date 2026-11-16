@@ -1,27 +1,43 @@
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject } from '@openchamber/sdk';
-import { applyHostReady, mountBadge, mountButton, mountMenu } from '@openchamber/sdk/ui';
-import type { MenuItem } from '@openchamber/sdk/ui';
-import { deleteTask as deleteStoredTask, loadTasks, saveTask } from './store/taskStore.ts';
+import { applyHostReady, mountBadge, mountButton } from '@openchamber/sdk/ui';
+import { loadTasks, saveTask } from './store/taskStore.ts';
+import {
+  createBacklogTask,
+  deleteTaskWithDismissal,
+  moveTaskToEnd,
+  patchTask,
+  planMove,
+  saveMove,
+  statusMove,
+} from './store/taskOps.ts';
 import { loadDismissedSessions, saveDismissedSessions } from './store/dismissedSessions.ts';
 import { DEFAULT_PANEL_PREFS, loadPanelPrefs, savePanelPrefs } from './store/panelPrefs.ts';
-import { applyPatch, createTask, isStatus, STATUSES, STATUS_LABELS, type Task, type TaskStatus } from './domain/task.ts';
-import { planDrop, rankAtEnd } from './domain/board.ts';
-import { buildSections, countUnseen, describeActivity, visibleTasks, type PanelItem, type SessionLiveState } from './domain/panelView.ts';
+import { applyPatch, type Task, type TaskStatus } from './domain/task.ts';
+import { ALL_PROJECTS, matchesFilter } from './domain/board.ts';
+import { badgeForCounts, buildBoardView, countOpen, countUnseen, type BoardItem } from './domain/boardView.ts';
 import { DEFAULT_SYNC_OPTIONS } from './domain/sync.ts';
-import { describeHostError, projectForDirectory } from './host/workspace.ts';
-import { insertionTarget } from './ui/dnd.ts';
+import { createSessionSync } from './host/sessionSync.ts';
+import { describeHostError, fetchSessions, fetchWorktrees, projectForDirectory } from './host/workspace.ts';
+import { fetchServiceBranches } from './host/branchService.ts';
+import { buildBaseBranchOptions, describeWorktreeOption, hasKnownBranches } from './domain/worktree.ts';
+import { createDictation } from './host/dictation.ts';
+import { mountTaskDetail } from './ui/detail.ts';
+import { mountKanbanView } from './ui/kanbanView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { el } from './ui/dom.ts';
 
 /**
- * The rail panel is narrow, so the board's five views are stacked as
- * collapsible sections instead of a second horizontal board; the full board
- * lives on the full-screen page (Extension pages menu) and stays the only
- * writer of agent-driven status changes. This panel re-groups rows by the
- * live agent state for display only; what it does write are deliberate user
- * actions — quick-added tasks, drag/menu moves and deletes, Mark done, and
- * clearing the unseen marker when a chat opens.
+ * The rail panel IS the board, filtered to whichever project OpenChamber
+ * currently has open — the same sections, rows, menus and drop math as the
+ * page, rendered for a narrow rail (`kanbanView` rail mode). The page stays
+ * the only writer of agent-driven status changes; this panel regroups rows
+ * by the live agent state for display only (the → chip) and persists only
+ * deliberate user actions: quick-added tasks, drag/menu moves and deletes,
+ * Mark done, and clearing the unseen marker when a chat opens. What the
+ * panel now also carries is the page's own detail dialog (Edit task in the
+ * ⋯ menu) minus Start Agent — that stays board-only, where the width for
+ * the worktree pickers exists.
  */
 const host = connectHost();
 const root = document.querySelector('#root');
@@ -42,26 +58,52 @@ let collapsed = new Set<TaskStatus>(DEFAULT_PANEL_PREFS.collapsed);
  * keep out of auto-adoption.
  */
 let dismissedSessionIds = new Set<string>();
-let draggingId: string | null = null;
 /** The sections as the last render drew them — what a drop plan is computed against. */
-let currentSections: Record<TaskStatus, PanelItem[]>;
-const live = new Map<string, SessionLiveState>();
-const subs = new Map<string, Promise<() => void>>();
+let currentSections: Record<string, BoardItem[]> | null = null;
 let intervalId: number | undefined;
 let reloadTimer: number | undefined;
 let reloading = false;
 let everLoaded = false;
+let detail: { dispose: () => void } | null = null;
+let board: ReturnType<typeof mountKanbanView> | null = null;
+let dictation: ReturnType<typeof createDictation> | null = null;
 
-type SectionUi = { count: HTMLElement; chev: HTMLElement; body: HTMLElement };
-type BadgeHandle = ReturnType<typeof mountBadge>;
-
-let badge: BadgeHandle;
+let badge: ReturnType<typeof mountBadge>;
 let statusEl: HTMLElement;
 let scopeLine: HTMLElement;
 let unseenLine: HTMLElement;
-let sectionEls: Record<TaskStatus, SectionUi>;
 
-/** The project OpenChamber currently has open, resolved from its directory (nested paths included). */
+/**
+ * The tasks a rail surface may show: the current project's tasks when
+ * OpenChamber has one open — every task when not (or when the open directory
+ * matches no registered project).
+ */
+const visibleTasksForProject = (all: readonly Task[], currentProjectId: string | null): readonly Task[] =>
+  all.filter((task) => matchesFilter(task, { projectId: currentProjectId ?? ALL_PROJECTS, query: '' }));
+
+/** The one place `tasks` changes that also refreshes the live watch: only visible projects are subscribed. */
+const applyTasks = (next: Task[]) => {
+  tasks = [...next];
+  sessionSync.sync(visibleTasksForProject(tasks, currentProject?.id ?? null));
+};
+
+/**
+ * The shared live-state provider: one `onSessions` subscription per visible
+ * project holding linked sessions (same per-project pattern as always,
+ * inside the frame's subscription cap), rebuilt on every trusted snapshot.
+ * The panel passes no `onStatusChange`: the single-writer invariant puts all
+ * agent-driven status writes on the board page.
+ */
+const sessionSync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, null, undefined, {
+  onLiveChange: () => { if (everLoaded && !disposed) render(); },
+  onSnapshot: () => {
+    // Storage has no change push: outside writes (the board page saving a
+    // drag, a move, an edit) arrive on the next session snapshot tick, on
+    // this low-cadence pass, or via Refresh.
+    scheduleReload();
+  },
+});
+
 const resolveCurrentProject = () => {
   currentProject = projectForDirectory(projects, currentDirectory);
 };
@@ -72,6 +114,10 @@ host.onReady((ctx) => {
   applyHostReady(ctx, document.documentElement);
   currentDirectory = ctx.directory;
   injectStyles();
+  // Voice dictation for the detail dialog's description field (mic feature
+  // gate comes from the host's ready context; no microphone offer, no mic
+  // button). One controller per panel mount.
+  dictation = createDictation(host, { supported: ctx.features?.microphone === true });
   root.replaceChildren();
 
   const wrap = el('div', 'kb-page kb-rail');
@@ -100,8 +146,29 @@ host.onReady((ctx) => {
     void quickCommit(title);
   });
   wrap.append(quickAdd);
-  const sectionsRoot = el('div', 'kb-panel-sections');
-  wrap.append(sectionsRoot);
+
+  board = mountKanbanView(wrap, 'rail', {
+    onActivate: (task) => { void openChat(task); },
+    onEdit: (task) => { openDetail(task.id); },
+    onMoveStatus: (task, status) => { void moveTaskByMenu(task, status); },
+    onDelete: (task) => { void removeTask(task); },
+    onDrop: (id, status, beforeId) => { void dropTask(id, status, beforeId); },
+    onDropEnd: (id, status) => { void dropTaskEnd(id, status); },
+    onOpenChat: (task) => { void openChat(task); },
+    onMarkDone: (task) => { void markDone(task); },
+    // Per-row project names matter only in show-all mode; scoped to one
+    // project the header line names it once and the row line stays purely
+    // about the agent.
+    projectName: (task) =>
+      (!currentProject && task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? null : null),
+    isCollapsed: (status) => collapsed.has(status),
+    onToggleSection: (status) => {
+      if (collapsed.has(status)) collapsed.delete(status); else collapsed.add(status);
+      void savePanelPrefs(host, { collapsed: [...collapsed] }).catch(() => undefined);
+      if (everLoaded) render();
+    },
+  });
+
   const foot = el('div', 'kb-rail-foot');
   foot.append(el('p', 'kb-muted', 'Full board: Extension pages menu'));
   mountButton(foot, { label: 'Refresh', variant: 'ghost', onClick: () => { void reload(); } });
@@ -109,68 +176,24 @@ host.onReady((ctx) => {
   root.append(wrap);
 
   badge = mountBadge(badgeSlot, { label: '', tone: 'neutral' });
-  sectionEls = {} as Record<TaskStatus, SectionUi>;
-  for (const status of STATUSES) {
-    const section = el('div', 'kb-psec');
-    const headBtn = document.createElement('button');
-    headBtn.type = 'button';
-    headBtn.className = 'kb-psec-head';
-    headBtn.append(el('span', 'kb-psec-name', STATUS_LABELS[status]));
-    const count = el('span', 'kb-psec-count', '0');
-    const chev = el('span', 'kb-psec-chevron', '▾');
-    headBtn.append(count, chev);
-    const body = el('div', 'kb-psec-body');
-    section.append(headBtn, body);
-    sectionsRoot.append(section);
-    sectionEls[status] = { count, chev, body };
-    headBtn.addEventListener('click', () => {
-      if (collapsed.has(status)) collapsed.delete(status); else collapsed.add(status);
-      void savePanelPrefs(host, { collapsed: [...collapsed] }).catch(() => undefined);
-      if (everLoaded) render();
-    });
-    // Rows drag between sections and reorder within them with the board's own
-    // math; a drop on the header — included for a collapsed section — appends
-    // at the end, so every column stays reachable while folded.
-    section.addEventListener('dragover', (event) => {
-      if (!draggingId) return;
-      event.preventDefault();
-      section.classList.add('kb-dragover');
-    });
-    section.addEventListener('dragleave', (event) => {
-      if (event.target === section) section.classList.remove('kb-dragover');
-    });
-    section.addEventListener('drop', (event) => {
-      event.preventDefault();
-      section.classList.remove('kb-dragover');
-      const id = draggingId ?? event.dataTransfer?.getData('text/plain') ?? null;
-      draggingId = null;
-      if (!id) return;
-      if ((event.target as HTMLElement | null)?.closest?.('.kb-psec-head')) {
-        void moveTaskToEnd(id, status);
-        return;
-      }
-      const beforeId = insertionTarget(collectRects(body, id), event.clientY);
-      void moveTaskTo(id, status, beforeId, currentSections[status] ?? []);
-    });
-  }
-
-  // Storage has no change push: outside writes (the board page saving a drag,
-  // a move, an edit) arrive on the next session snapshot tick, on this low
-  // cadence pass, or via Refresh.
+  // Storage has no change push outside the session snapshots: this low
+  // cadence pass and Refresh cover the idle case.
   intervalId = window.setInterval(() => { void reload(); }, 30_000);
 
   void host.onProjects((snapshot) => {
     if (disposed || snapshot.state !== 'ready') return;
     projects = snapshot.projects;
     resolveCurrentProject();
-    if (everLoaded) { render(); syncSubscriptions(); }
+    applyTasks(tasks);
+    if (everLoaded) render();
   }).then(() => {}, () => undefined);
 
   void host.onDirectory((directory) => {
     if (disposed) return;
     currentDirectory = directory;
     resolveCurrentProject();
-    if (everLoaded) { render(); syncSubscriptions(); }
+    applyTasks(tasks);
+    if (everLoaded) render();
   });
 
   void start();
@@ -181,11 +204,10 @@ const start = async () => {
     const [prefs, loaded, dismissed] = await Promise.all([loadPanelPrefs(host), loadTasks(host), loadDismissedSessions(host)]);
     if (disposed) return;
     collapsed = new Set(prefs.collapsed);
-    tasks = loaded.tasks;
+    applyTasks(loaded.tasks);
     dismissedSessionIds = dismissed;
     everLoaded = true;
     statusEl.hidden = true;
-    syncSubscriptions();
     render();
   } catch (error) {
     statusEl.textContent = `Could not load tasks — ${describeHostError(error)}`;
@@ -198,10 +220,9 @@ const reload = async () => {
   try {
     const [{ tasks: loaded }, dismissed] = await Promise.all([loadTasks(host), loadDismissedSessions(host)]);
     if (disposed) return;
-    tasks = loaded;
+    applyTasks(loaded);
     dismissedSessionIds = dismissed;
     if (!everLoaded) { everLoaded = true; statusEl.hidden = true; }
-    syncSubscriptions();
     render();
   } catch (error) {
     // Transient storage failures keep the last view on screen; only a first
@@ -212,60 +233,15 @@ const reload = async () => {
   }
 };
 
-/*
- * Session snapshots tick continuously while an agent runs; each one rebuilds
- * this project's live-state entries from scratch (`ready` lists are complete)
- * and schedules one debounced storage read, so tasks the board page just
- * saved show up here without a manual Refresh.
- */
 const scheduleReload = () => {
   if (reloadTimer !== undefined || disposed || !mounted) return;
   reloadTimer = window.setTimeout(() => { reloadTimer = undefined; void reload(); }, 500);
 };
 
-const syncSubscriptions = () => {
-  const shown = visibleTasks(tasks, currentProject?.id ?? null);
-  const needed = new Set<string>();
-  for (const task of shown) if (task.sessionId && task.projectId) needed.add(task.projectId);
-  for (const projectId of needed) {
-    if (subs.has(projectId)) continue;
-    let promise: Promise<() => void>;
-    promise = host.onSessions(projectId, (snapshot) => {
-      if (disposed) return;
-      // `loading` keeps the last known state; a `ready` snapshot is a complete
-      // list, so rebuild from scratch; an `error` means the truth is unknown —
-      // drop this project's entries and let rows fall back to their stored
-      // status rather than display stale activity as if it were live.
-      if (snapshot.state === 'error') {
-        for (const [id, state] of live) if (state.projectId === projectId) live.delete(id);
-      } else if (snapshot.state === 'ready') {
-        for (const [id, state] of live) if (state.projectId === projectId) live.delete(id);
-        for (const session of snapshot.sessions) {
-          if (session.parentId !== null) continue; // subagent sessions are never a task's chat
-          live.set(session.id, { projectId, activity: session.activity, outcome: session.outcome, updatedAt: session.updatedAt });
-        }
-      }
-      if (everLoaded) render();
-      scheduleReload();
-    });
-    promise.then(() => {}, () => { if (subs.get(projectId) === promise) subs.delete(projectId); });
-    subs.set(projectId, promise);
-  }
-  for (const [projectId, promise] of [...subs]) {
-    if (needed.has(projectId)) continue;
-    subs.delete(projectId);
-    // A project leaving the visible set also leaves its live behind: an
-    // unsubscribed project's entries would go stale, and stale activity must
-    // never display as if it were live when it comes back into view.
-    for (const [id, state] of live) if (state.projectId === projectId) live.delete(id);
-    void promise.then((stop) => stop(), () => undefined);
-  }
-};
-
 const render = () => {
-  currentSections = buildSections(visibleTasks(tasks, currentProject?.id ?? null), live, DEFAULT_SYNC_OPTIONS);
-  const sections = currentSections;
-  const open = STATUSES.reduce((count, status) => count + sections[status].length, 0);
+  const sections = buildBoardView(tasks, sessionSync.live(), { projectId: currentProject?.id ?? ALL_PROJECTS, query: '' });
+  currentSections = sections;
+  const open = countOpen(sections);
   const unseen = countUnseen(sections);
   if (currentProject) {
     scopeLine.textContent = `Project: ${currentProject.name}`;
@@ -273,156 +249,58 @@ const render = () => {
   } else {
     scopeLine.hidden = true;
   }
-  badge.update({
-    label: unseen > 0 ? `${open} open · ${unseen} unseen` : `${open} open`,
-    tone: unseen > 0 ? 'warning' : 'neutral',
-  });
-  void host.setBadge(open || null).catch(() => undefined);
+  const badgeCounts = badgeForCounts(open, unseen);
+  badge.update({ label: badgeCounts.label, tone: badgeCounts.tone });
+  // The extension-tab badge counts open tasks board-wide — one stable
+  // meaning from either surface. The badge above describes what is on
+  // screen (this view's open count and unseen flags).
+  const openAll = tasks.filter((task) => task.status !== 'done').length;
+  void host.setBadge(openAll || null).catch(() => undefined);
   if (unseen > 0) {
     unseenLine.textContent = `${unseen} task${unseen === 1 ? '' : 's'} need${unseen === 1 ? 's' : ''} your review`;
     unseenLine.hidden = false;
   } else {
     unseenLine.hidden = true;
   }
-
-  for (const status of STATUSES) {
-    const ui = sectionEls[status];
-    const items = sections[status];
-    ui.count.textContent = String(items.length);
-    if (items.some((item) => item.attention && item.displayStatus !== 'done')) ui.count.dataset.attn = 'true';
-    else delete ui.count.dataset.attn;
-    const open = !collapsed.has(status);
-    ui.chev.textContent = open ? '▾' : '▸';
-    ui.body.hidden = !open;
-    ui.body.replaceChildren(...items.map(renderRow));
-    if (open && items.length === 0) ui.body.append(el('div', 'kb-panel-empty', 'No tasks'));
-  }
+  board?.render(sections);
 };
-
-const renderRow = (item: PanelItem) => {
-  const row = el('div', item.attention ? 'kb-panel-row kb-attn' : 'kb-panel-row');
-  row.dataset.id = item.task.id;
-  row.draggable = true;
-  const main = el('div', 'kb-panel-main');
-  row.append(main);
-  main.append(el('div', 'kb-panel-title', item.task.title));
-
-  const sub = el('div', 'kb-panel-sub');
-  // Per-row project names matter only in show-all mode; scoped to one project
-  // the header line names it once and the row line stays purely about the agent.
-  const project = !currentProject && item.task.projectId
-    ? projects.find((p) => p.id === item.task.projectId)?.name ?? null
-    : null;
-  if (project) sub.append(el('span', 'kb-panel-project', project));
-  // A chat with no trusted live state has nothing observable to say; say only
-  // that it exists rather than inventing an activity.
-  const line = item.live
-    ? describeActivity(item.live)
-    : item.task.sessionId
-      ? ({ text: 'chat linked', tone: 'idle' }) as const
-      : null;
-  if (line) {
-    if (project) sub.append(el('span', 'kb-panel-sep', '·'));
-    const dot = el('span', 'kb-panel-dot');
-    dot.dataset.state = line.tone;
-    sub.append(dot, el('span', 'kb-panel-live', line.text));
-  }
-  main.append(sub);
-
-  if (item.attention) {
-    const actions = el('div', 'kb-panel-actions');
-    if (item.task.sessionId) {
-      const chat = el('button', 'kb-panel-btn kb-panel-btn-primary', 'Open chat');
-      chat.type = 'button';
-      chat.addEventListener('click', (event) => { event.stopPropagation(); void openChat(item.task); });
-      actions.append(chat);
-    }
-    if (item.displayStatus !== 'done') {
-      const done = el('button', 'kb-panel-btn', 'Mark done');
-      done.type = 'button';
-      done.addEventListener('click', (event) => { event.stopPropagation(); void markDone(item.task); });
-      actions.append(done);
-    }
-    if (actions.childElementCount > 0) main.append(actions);
-  }
-
-  if (item.movedByAgent) row.append(el('span', 'kb-panel-chip', `→ ${STATUS_LABELS[item.displayStatus]}`));
-
-  const menuSlot = el('span', 'kb-panel-menu');
-  row.append(menuSlot);
-  mountMenu(menuSlot, { label: '⋯', variant: 'ghost', size: 'xs', items: rowMenuItems(item), onSelect: onRowMenuSelect(item) });
-
-  const openTask = () => { void openChat(item.task); };
-  row.addEventListener('click', (event) => {
-    // The menu trigger (and its popup) live inside the row: a click there is
-    // the menu's to handle, never row navigation.
-    if ((event.target as HTMLElement)?.closest('.kb-panel-menu')) return;
-    void openChat(item.task);
-  });
-  row.tabIndex = 0;
-  row.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTask(); }
-  });
-  row.addEventListener('dragstart', (event) => {
-    draggingId = item.task.id;
-    row.classList.add('kb-dragging');
-    event.dataTransfer?.setData('text/plain', item.task.id);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-  });
-  row.addEventListener('dragend', () => { draggingId = null; row.classList.remove('kb-dragging'); });
-  return row;
-};
-
-/** Move-and-delete affordance for one row: every other column, then delete. */
-const rowMenuItems = (item: PanelItem): MenuItem[] => [
-  ...STATUSES
-    .filter((status) => status !== item.displayStatus)
-    .map((status) => ({ id: `move:${status}`, label: `Move to ${STATUS_LABELS[status]}` })),
-  { separator: true },
-  { id: 'delete', label: 'Delete task', destructive: true },
-];
-
-const onRowMenuSelect = (item: PanelItem) => (menuId: string) => {
-  if (menuId === 'delete') { void removeTask(item.task); return; }
-  if (menuId.startsWith('move:')) {
-    const status = menuId.slice(5);
-    if (isStatus(status)) void moveTaskByMenu(item.task, status);
-  }
-};
-
-/** The rows of one section body, top to bottom, for `insertionTarget`. */
-const collectRects = (body: HTMLElement, movingId: string) =>
-  [...body.querySelectorAll<HTMLElement>('.kb-panel-row')]
-    .filter((node) => node.dataset.id !== movingId)
-    .map((node) => ({
-      id: node.dataset.id ?? '',
-      top: node.getBoundingClientRect().top,
-      height: node.getBoundingClientRect().height,
-    }));
 
 /**
- * The panel cannot open the full board (extension pages have no open-call),
- * so a row's one navigable destination is its chat. Opening an unseen task's
- * chat is what "reviewed" means — the marker is cleared first, awaited, the
- * same way the board's Open Chat does it before `openSession` can tear this
- * frame down.
+ * "Reviewed" means the marker is cleared — opening the task's chat has
+ * always been that on the rail, and the page's Open Chat path does the
+ * same, because `openSession` can tear this frame down as part of the call,
+ * before a fire-and-forget write would reach storage.
  */
+const markReviewed = (task: Task) => {
+  if (task.needsAttentionSince === null) return;
+  const patched = patchTask(tasks, task.id, { needsAttentionSince: null });
+  if (!patched) return;
+  applyTasks(patched.next);
+  render();
+  void saveTask(host, patched.task).catch(() => void reload());
+};
+
 const openChat = async (task: Task) => {
   if (disposed) return;
   const current = tasks.find((t) => t.id === task.id) ?? task;
   if (!current.sessionId) {
     void host.toast({
       kind: 'info',
-      message: `"${current.title}" has no chat linked yet — use the full board (Extension pages menu) to start an agent.`,
+      message: `"${current.title}" has no chat linked yet — open it via ⋯ → Edit task, or use the full board (Extension pages menu) to start an agent.`,
     }).catch(() => undefined);
     return;
   }
   if (current.needsAttentionSince !== null) {
-    const updated = applyPatch(current, { needsAttentionSince: null });
-    tasks = tasks.map((t) => (t.id === current.id ? updated : t));
-    render();
-    try { await saveTask(host, updated); }
-    catch { void reload(); }
+    // Awaiting the marker clear is the same discipline as the board's Open
+    // Chat path: `openSession` can tear this frame down as part of the call,
+    // before a fire-and-forget write would reach the host.
+    const patched = patchTask(tasks, current.id, { needsAttentionSince: null });
+    if (patched) {
+      applyTasks(patched.next);
+      render();
+      try { await saveTask(host, patched.task); }
+      catch { void reload(); }
+    }
   }
   await host.openSession(current.sessionId);
 };
@@ -430,27 +308,24 @@ const openChat = async (task: Task) => {
 /** A deliberate user action — the only way a panel tap ever sets Done. */
 const markDone = async (task: Task) => {
   if (disposed) return;
-  const current = tasks.find((t) => t.id === task.id) ?? task;
-  const updated = applyPatch(current, { status: 'done', needsAttentionSince: null });
-  tasks = tasks.map((t) => (t.id === current.id ? updated : t));
+  const patched = patchTask(tasks, task.id, { status: 'done', needsAttentionSince: null });
+  if (!patched) return;
+  applyTasks(patched.next);
   render();
-  try { await saveTask(host, updated); }
+  try { await saveTask(host, patched.task); }
   catch { void reload(); }
 };
 
 /**
  * Enter on the quick-add field: a real, persisted task, named right here,
- * appended to Backlog in the current project (unassigned when everything
- * shows — the same thing the board's Add task does in All-projects mode).
+ * appended to Backlog in the current project (unassigned in show-all mode —
+ * the same thing the board's Add task does in All-projects mode).
  */
 const quickCommit = async (title: string) => {
   if (disposed || !title) return;
-  const projectId = currentProject?.id ?? null;
   try {
-    const task = createTask({ title, projectId }, rankAtEnd(tasks, 'backlog'));
-    await saveTask(host, task);
-    tasks = [...tasks, task];
-    // No subscription sync needed: a fresh task carries no session link.
+    const task = await createBacklogTask(host, { tasks, title, projectId: currentProject?.id ?? null });
+    applyTasks([...tasks, task]);
     render();
     void host.toast({
       kind: 'info',
@@ -461,52 +336,46 @@ const quickCommit = async (title: string) => {
   }
 };
 
-/** The board's exact rank math (`planDrop`), so panel and page orderings never diverge. */
-const moveTaskTo = async (id: string, status: TaskStatus, beforeId: string | null, visible: PanelItem[]) => {
-  const current = tasks.find((t) => t.id === id);
-  if (!current) return;
-  const plan = planDrop(visible.map((entry) => entry.task), id, beforeId);
-  const rebalanceMap = new Map(plan.rebalance.map((entry) => [entry.id, entry.rank]));
-  const next = tasks.map((task) => {
-    if (task.id === id) return applyPatch(task, { status, rank: plan.rank, needsAttentionSince: null });
-    const newRank = rebalanceMap.get(task.id);
-    return newRank === undefined ? task : applyPatch(task, { rank: newRank });
-  });
-  tasks = next;
+/**
+ * Drop between rows (or into a section body): the board's exact rank math
+ * (`planMove`), computed against the sections as the last render drew them,
+ * so panel and page orderings never diverge.
+ */
+const dropTask = async (id: string, status: TaskStatus, beforeId: string | null) => {
+  const visible = (currentSections?.[status] ?? []).map((entry: BoardItem) => entry.task);
+  const planned = planMove(tasks, id, status, beforeId, visible);
+  if (!planned) return;
+  applyTasks(planned.next);
   render();
-  try {
-    await saveTask(host, next.find((t) => t.id === id)!);
-    await Promise.all(plan.rebalance.map((entry) => saveTask(host, next.find((t) => t.id === entry.id)!)));
-  } catch (error) {
-    void host.toast({ kind: 'error', message: `Could not save the move — ${describeHostError(error)}` }).catch(() => undefined);
-    void reload();
-  }
-};
-
-/** A drop on a section header — included for a collapsed one: append at that column's end. */
-const moveTaskToEnd = async (id: string, status: TaskStatus) => {
-  const current = tasks.find((t) => t.id === id);
-  const endRank = rankAtEnd(tasks, status);
-  if (!current || (current.status === status && current.needsAttentionSince === null && current.rank === endRank)) return;
-  const updated = applyPatch(current, { status, rank: endRank, needsAttentionSince: null });
-  tasks = tasks.map((t) => (t.id === current.id ? updated : t));
-  render();
-  try { await saveTask(host, updated); }
+  try { await saveMove(host, planned.next, id, planned.plan); }
   catch (error) {
     void host.toast({ kind: 'error', message: `Could not save the move — ${describeHostError(error)}` }).catch(() => undefined);
     void reload();
   }
 };
 
-/** Menu move: a status change that keeps its rank — same semantics as the board detail popup's Move-to buttons. */
-const moveTaskByMenu = async (task: Task, status: TaskStatus) => {
-  const current = tasks.find((t) => t.id === task.id);
-  if (!current) return;
-  if (current.status === status && current.needsAttentionSince === null) return;
-  const updated = applyPatch(current, { status, needsAttentionSince: null });
-  tasks = tasks.map((t) => (t.id === current.id ? updated : t));
+/** Drop on a section header — included for a collapsed one: append at that column's end. */
+const dropTaskEnd = async (id: string, status: TaskStatus) => {
+  const moved = moveTaskToEnd(tasks, id, status);
+  if (!moved.changed) return;
+  applyTasks(moved.next);
   render();
-  try { await saveTask(host, updated); }
+  try {
+    const movedTask = moved.next.find((t) => t.id === id);
+    if (movedTask) await saveTask(host, movedTask);
+  } catch (error) {
+    void host.toast({ kind: 'error', message: `Could not save the move — ${describeHostError(error)}` }).catch(() => undefined);
+    void reload();
+  }
+};
+
+/** Menu move: a status change that keeps its rank — the detail popup's Move-to semantics. */
+const moveTaskByMenu = async (task: Task, status: TaskStatus) => {
+  const patched = statusMove(task, status);
+  if (!patched) return;
+  applyTasks(tasks.map((t) => (t.id === task.id ? patched : t)));
+  render();
+  try { await saveTask(host, patched); }
   catch (error) {
     void host.toast({ kind: 'error', message: `Could not save the move — ${describeHostError(error)}` }).catch(() => undefined);
     void reload();
@@ -515,46 +384,131 @@ const moveTaskByMenu = async (task: Task, status: TaskStatus) => {
 
 /**
  * Deleting a task whose session is linked must not let the board's orphan
- * watcher re-adopt that running session as a fresh card. The board's own
- * delete flow records the session in dismissedSessions and saves that list
- * BEFORE deleting, rolling the dismissal back if the delete fails; the panel
- * runs no orphan watcher itself, but the dismissal written here protects the
- * session across the board's next adoption pass. This is the only reason
- * `dismissedSessionIds` is loaded on every panel load.
+ * watcher re-adopt that running session as a fresh card. The panel runs no
+ * orphan watcher itself, but the dismissal written here (before the
+ * delete, per the shared `deleteTaskWithDismissal` protocol) protects the
+ * session across the board's next adoption pass.
  */
 const removeTask = async (task: Task) => {
   if (disposed) return;
   const current = tasks.find((t) => t.id === task.id) ?? task;
-  const sessionId = current.sessionId;
-  const alreadyDismissed = sessionId !== null && dismissedSessionIds.has(sessionId);
-  if (sessionId && !alreadyDismissed) {
-    dismissedSessionIds.add(sessionId);
-    try { await saveDismissedSessions(host, dismissedSessionIds); }
-    catch (error) {
-      dismissedSessionIds.delete(sessionId);
-      void host.toast({ kind: 'error', message: `Could not delete "${current.title}" — ${describeHostError(error)}` }).catch(() => undefined);
-      return;
-    }
-  }
   try {
-    await deleteStoredTask(host, current.id);
+    await deleteTaskWithDismissal(host, current, dismissedSessionIds);
   } catch (error) {
-    if (sessionId && !alreadyDismissed) {
-      dismissedSessionIds.delete(sessionId);
-      void saveDismissedSessions(host, dismissedSessionIds).catch(() => undefined);
-    }
     void host.toast({ kind: 'error', message: `Could not delete "${current.title}" — ${describeHostError(error)}` }).catch(() => undefined);
     return;
   }
-  tasks = tasks.filter((t) => t.id !== current.id);
-  syncSubscriptions();
+  applyTasks(tasks.filter((t) => t.id !== current.id));
   render();
   void host.toast({ kind: 'info', message: `Deleted "${current.title}".` }).catch(() => undefined);
 };
+
+// --- The detail dialog (⋯ → Edit task): the page's own dialog, compact in
+// --- the rail, minus Start Agent (board-only, where the width for the
+// --- worktree pickers exists). It does not touch the `openTaskId`
+// --- preference; restoring an open popup is a page concept.
+
+const openDetail = (id: string) => {
+  const found = tasks.find((t) => t.id === id);
+  if (!found) return;
+  markReviewed(found);
+  const task = tasks.find((t) => t.id === id) ?? found;
+  detail?.dispose();
+  detail = mountTaskDetail(root, {
+    task,
+    compact: true,
+    projects: projects.map((p) => ({ id: p.id, name: p.name })),
+    // No Start Agent here: deliberate scope, not a capability limit.
+    onStartAgent: null,
+    dictation,
+    onClose: closeDetail,
+    onToast: (message, kind) => { void host.toast({ kind, message }).catch(() => undefined); },
+    onSave: async (patch) => {
+      const patched = patchTask(tasks, task.id, patch);
+      if (!patched) return;
+      await saveTask(host, patched.task);
+      applyTasks(patched.next);
+      render();
+      closeDetail();
+      openDetail(task.id);
+    },
+    onDelete: async () => {
+      const current = tasks.find((t) => t.id === task.id) ?? task;
+      await deleteTaskWithDismissal(host, current, dismissedSessionIds);
+      applyTasks(tasks.filter((t) => t.id !== current.id));
+      render();
+      closeDetail();
+      void host.toast({ kind: 'info', message: `Deleted "${current.title}".` }).catch(() => undefined);
+    },
+    onOpenChat: async (sessionId) => {
+      const current = tasks.find((t) => t.id === task.id) ?? task;
+      const linked = current.sessionId === sessionId ? current : { ...current, sessionId };
+      markReviewed(linked);
+      closeDetail();
+      await host.openSession(sessionId);
+    },
+    onLinkSession: async (sessionId, sessionProjectId) => {
+      const current = tasks.find((t) => t.id === task.id) ?? task;
+      // Claimed in `dismissedSessions`-cleanup only; an existing-session link
+      // needs no adoption guard of its own — the only watcher here belongs
+      // to the board page, which reads the saved link at its next reload.
+      const updated = applyPatch(current, {
+        sessionId,
+        ...(sessionProjectId ? { projectId: sessionProjectId } : {}),
+        status: current.status === 'backlog' ? 'todo' : current.status,
+      });
+      await saveTask(host, updated);
+      if (dismissedSessionIds.delete(sessionId)) {
+        // Explicitly linking a dismissed session brings it back by choice.
+        try { await saveDismissedSessions(host, dismissedSessionIds); }
+        catch { dismissedSessionIds.add(sessionId); }
+      }
+      applyTasks(tasks.map((t) => (t.id === current.id ? updated : t)));
+      render();
+      closeDetail();
+      openDetail(current.id);
+    },
+    onUnlinkSession: async () => {
+      const patched = patchTask(tasks, task.id, { sessionId: null });
+      if (!patched) return;
+      await saveTask(host, patched.task);
+      applyTasks(patched.next);
+      render();
+      closeDetail();
+      openDetail(task.id);
+    },
+    loadSessionsForProject: async (projectId) => {
+      const result = await fetchSessions(host, projectId);
+      return result.sessions.map((s) => ({ id: s.id, title: s.title, activity: s.activity }));
+    },
+    loadWorktreeInfo: async (projectId) => {
+      // Only used by Start Agent, which the rail dialog does not mount; the
+      // dialog never calls this without Start Agent. Kept for the shared
+      // prop shape.
+      const result = await fetchWorktrees(host, projectId);
+      const directory = projects.find((p) => p.id === projectId)?.directory ?? null;
+      const serviceBranches = directory ? await fetchServiceBranches(host, directory) : null;
+      return {
+        destinations: result.worktrees.map(describeWorktreeOption),
+        baseBranches: serviceBranches ?? buildBaseBranchOptions(result.worktrees),
+        hasKnownBranches: serviceBranches ? serviceBranches.length > 2 : hasKnownBranches(result.worktrees),
+      };
+    },
+  });
+};
+
+const closeDetail = () => {
+  detail?.dispose();
+  detail = null;
+};
+
+// --- Teardown
 
 window.addEventListener('pagehide', () => {
   disposed = true;
   if (intervalId !== undefined) window.clearInterval(intervalId);
   if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
+  board?.dispose();
+  detail?.dispose();
   host.dispose();
 });

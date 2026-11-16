@@ -15,17 +15,30 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-column-empty{font-size:12px;color:var(--oc-muted);padding:8px 2px}
 .kb-card{background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:9px;padding:10px;cursor:pointer;display:flex;flex-direction:column;gap:6px}
 .kb-card:hover{border-color:var(--oc-hover)}
+.kb-card:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
 .kb-card.kb-dragging{opacity:.4}
-.kb-card.kb-card-needs-attention{border-color:var(--oc-warning);border-left-width:3px}
-.kb-card.kb-card-needs-attention:hover{border-color:var(--oc-warning)}
+.kb-card.kb-attn{border-color:var(--oc-warning);border-left-width:3px}
+.kb-card.kb-attn:hover{border-color:var(--oc-warning)}
 .kb-card-title{font-weight:550;font-size:13px;overflow-wrap:anywhere}
 .kb-card-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+/* The shared item head: title left, ⋯ menu right — same on cards and rows. */
+.kb-item-top{display:flex;align-items:flex-start;gap:8px}
+.kb-item-top .kb-panel-title{flex:1;min-width:0}
+.kb-card:hover .kb-panel-menu,.kb-card:focus-within .kb-panel-menu{opacity:1}
+.kb-column-count[data-attn]{color:var(--oc-warning,#e5a234)}
 .kb-card-ref{font:11px var(--oc-mono);color:var(--oc-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 .kb-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50}
 .kb-dialog{background:var(--oc-bg);color:var(--oc-fg);border:1px solid var(--oc-border);border-radius:12px;max-width:640px;width:100%;max-height:88vh;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
 .kb-dialog h2{margin:0;font-size:18px;letter-spacing:-.01em}
 .kb-dialog-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .kb-dialog-grid .kb-span2{grid-column:1/-1}
+/* Compact variant for a narrow host surface (the rail panel's Edit dialog):
+   single column, tighter rhythm — the same dialog otherwise. */
+.kb-dialog-compact{max-width:100%;padding:14px;gap:10px}
+.kb-dialog-compact h2{font-size:15px}
+.kb-dialog-compact .kb-dialog-grid{grid-template-columns:1fr;gap:10px}
+.kb-dialog-compact .kb-dialog-grid .kb-span2{grid-column:auto}
+.kb-dialog-compact .kb-section{padding-top:10px}
 .kb-section{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--oc-border);padding-top:12px}
 .kb-section-title{font-size:12px;font-weight:600;color:var(--oc-muted);text-transform:uppercase;letter-spacing:.02em}
 .kb-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

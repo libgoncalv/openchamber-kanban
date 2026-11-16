@@ -26,13 +26,20 @@ export type TaskDetailProps = {
   onOpenChat: (sessionId: string) => Promise<void>;
   onLinkSession: (sessionId: string, projectId: string | null) => Promise<void>;
   onUnlinkSession: () => Promise<void>;
-  onStartAgent: (input: { projectId: string; worktree: GuestSessionWorktree; title: string; description: string }) => Promise<void>;
+  /**
+   * Starts a real session for this task. Absent/null in the rail panel: the
+   * worktree pickers stay board-only, where the width for them exists. The
+   * "Or link an existing session" picker still renders without Start Agent.
+   */
+  onStartAgent?: ((input: { projectId: string; worktree: GuestSessionWorktree; title: string; description: string }) => Promise<void>) | null;
   loadSessionsForProject: (projectId: string) => Promise<SessionOption[]>;
   loadWorktreeInfo: (projectId: string) => Promise<WorktreeInfo>;
   /** Local voice dictation for the description; null/absent hides the mic button. */
   dictation?: DictationController | null;
   /** Non-blocking notices (dictation results, toasts): fires host.toast. */
   onToast?: (message: string, kind: 'info' | 'error') => void;
+  /** Single-column, tighter dialog for a narrow host surface (the rail panel). */
+  compact?: boolean;
 };
 
 const statusOptions: SelectOption[] = STATUSES.map((id) => ({ id, label: STATUS_LABELS[id] }));
@@ -42,7 +49,7 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   const overlay = el('div', 'kb-overlay');
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
-  const dialog = el('div', 'kb-dialog');
+  const dialog = el('div', props.compact ? 'kb-dialog kb-dialog-compact' : 'kb-dialog');
   overlay.append(dialog);
   root.append(overlay);
 
@@ -186,7 +193,10 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
     if (busy) return;
     busy = true;
     try {
-      await props.onSave({ status: next });
+      // A Move-to is a deliberate move: it clears the attention marker,
+      // exactly like dragging the card, the ⋯ menu's Move-to items, or
+      // opening the task — the same semantics on every surface.
+      await props.onSave({ status: next, needsAttentionSince: null });
       status = next; statusField.update({ value: status }); renderQuickMoveButtons();
       dirty = title !== props.task.title || description !== props.task.description || projectId !== (props.task.projectId ?? '');
       save.update({ disabled: !dirty });
@@ -215,11 +225,13 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   };
   renderSessionBody();
 
-  // --- Start Agent: shown only before a session is linked ---
+  // --- Start Agent: shown only before a session is linked, and only where
+  // --- the host surface carries it (the board page; the panel does not).
   const startRoot = el('div');
   const pickerRoot = el('div');
-  sessionSection.append(startRoot, pickerRoot);
-  startRoot.hidden = hasSession;
+  const hasStartAgent = !hasSession && props.onStartAgent != null;
+  if (hasStartAgent) sessionSection.append(startRoot);
+  sessionSection.append(pickerRoot);
   pickerRoot.hidden = hasSession;
 
   type StartFromMode = typeof DESTINATION_ROOT | typeof DESTINATION_NEW | 'existing';
@@ -231,7 +243,7 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   let worktreeGeneration = 0;
   let refreshWorktreeOptions = () => {};
 
-  if (!hasSession) {
+  if (hasStartAgent) {
     startRoot.append(el('p', 'kb-muted', 'Starts a real OpenCode session with the description above as its first message, and links it to this task.'));
     const startGrid = el('div', 'kb-dialog-grid'); startRoot.append(startGrid);
 
@@ -330,7 +342,8 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
             const worktree = buildSessionWorktree(destination, branchName, resolveBaseBranch(baseBranchSelection));
             // Whatever is currently typed, saved or not — Start Agent must not silently
             // fall back to the title/description this task had when the popup opened.
-            await props.onStartAgent({ projectId, worktree, title, description });
+            // (The start block only exists when `onStartAgent` was provided.)
+            await props.onStartAgent?.({ projectId, worktree, title, description });
           } catch (error) { showError(error); }
           finally { startBusy = false; startButton.update({ loading: false }); }
         })();

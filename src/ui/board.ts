@@ -1,7 +1,9 @@
 import type { GuestProject, HostClient } from '@openchamber/sdk';
-import { mountBanner, mountButton, mountSearchField, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
-import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
-import { ALL_PROJECTS, NO_PROJECT, groupColumns, planDrop, rankAtEnd, type BoardFilter } from '../domain/board.ts';
+import { mountBadge, mountBanner, mountButton, mountSearchField, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
+import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
+import { ALL_PROJECTS, NO_PROJECT, rankAtEnd, type BoardFilter } from '../domain/board.ts';
+import { badgeForCounts, buildBoardView, countOpen, countUnseen, type BoardSections } from '../domain/boardView.ts';
+import { createBacklogTask, deleteTaskWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
 import { deleteTask, loadTasks, saveTask } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
@@ -17,8 +19,8 @@ import { sessionTitleForTask, titleForOrphanSession } from '../domain/autoTask.t
 import { buildBaseBranchOptions, describeWorktreeOption, hasKnownBranches, resolveTaskWorktree } from '../domain/worktree.ts';
 import { mountTaskDetail } from './detail.ts';
 import { createDictation } from '../host/dictation.ts';
+import { mountKanbanView } from './kanbanView.ts';
 import { injectStyles } from './styles.ts';
-import { insertionTarget } from './dnd.ts';
 import { el } from './dom.ts';
 
 export type BoardHost = Pick<
@@ -39,14 +41,23 @@ const EXTENSION_ID = 'kanban-board';
 /** Never dereferenced by the host; only shown as this task's chip link. */
 const taskUrl = (id: string) => `https://kanban.local/tasks/${id}`;
 
+/**
+ * The full-screen board is the same kanban view as the rail panel, across
+ * all projects (with a project filter and search), with the editing depth:
+ * the detail popup, Start Agent, link/unlink, and the machinery that has no
+ * place in a rail surface — the agent-status writer, adoption, and link
+ * reconciliation. Rendering and shared mutations come from `kanbanView` and
+ * `taskOps`, so the two surfaces can never disagree on look or ordering.
+ */
 export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { microphoneSupported?: boolean }) => {
   injectStyles();
   root.replaceChildren();
 
   // Voice dictation for the description field (mic feature gate comes from the
-  // host's ready context; no microphone offer, no mic button). One controller
-  // per board mount; it closes the microphone whenever its detail dialog
-  // unmounts, which keeps the capture scoped to one open popup.
+  // host's ready context passed by page.ts; no microphone offer, no mic
+  // button). One controller per board mount; it closes the microphone whenever
+  // its detail dialog unmounts, which keeps the capture scoped to one open
+  // popup.
   const dictation = createDictation(host, { supported: options?.microphoneSupported === true });
 
   const page = el('div', 'kb-page');
@@ -56,6 +67,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   const projectSelectWrap = el('div'); toolbar.append(projectSelectWrap);
   const searchWrap = el('div', 'grow'); toolbar.append(searchWrap);
   const refresh = mountButton(toolbar, { label: 'Refresh', variant: 'ghost', onClick: () => { void reload(); } });
+  const badgeSlot = el('span'); toolbar.append(badgeSlot);
+  const badge = mountBadge(badgeSlot, { label: '', tone: 'neutral' });
 
   const addRow = el('div', 'kb-row'); page.append(addRow);
   const bannerSlot = el('div'); page.append(bannerSlot);
@@ -67,6 +80,26 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   const clearBanner = () => { bannerSlot.hidden = true; };
   const notify = (error: unknown) => showBanner('Something went wrong', describeHostError(error));
 
+  const columnsWrap = el('div'); page.append(columnsWrap);
+  const spinnerSlot = el('div'); page.append(spinnerSlot);
+
+  let tasks: Task[] = [];
+  let projects: GuestProject[] = [];
+  let prefs: Prefs = { projectId: ALL_PROJECTS, query: '', openTaskId: null };
+  let filter: BoardFilter = { projectId: ALL_PROJECTS, query: '' };
+  let detail: { dispose: () => void } | null = null;
+  let disposed = false;
+  let currentSections: BoardSections | null = null;
+
+  const board = mountKanbanView(columnsWrap, 'page', {
+    onActivate: (task) => { openDetail(task.id); },
+    onEdit: (task) => { openDetail(task.id); },
+    onDelete: (task) => { void deleteTaskForTask(task); },
+    onDrop: (id, status, beforeId) => { void dropTask(id, status, beforeId); },
+    onMoveStatus: (task, status) => { void moveTaskByMenu(task, status); },
+    projectName: (task) => (task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? task.projectId : null),
+  });
+
   // No title field here on purpose: a click creates a real, persisted task right
   // away (title "New task", editable immediately in the popup that opens for it),
   // instead of asking for a title before there's anything to attach it to.
@@ -75,12 +108,11 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     onClick: () => {
       void (async () => {
         try {
-          const task = createTask(
-            { title: DEFAULT_TASK_TITLE, projectId: filter.projectId === ALL_PROJECTS || filter.projectId === NO_PROJECT ? null : filter.projectId },
-            rankAtEnd(tasks, 'backlog'),
-          );
           add.update({ loading: true });
-          await saveTask(host, task);
+          const task = await createBacklogTask(
+            host,
+            { tasks, title: DEFAULT_TASK_TITLE, projectId: filter.projectId === ALL_PROJECTS || filter.projectId === NO_PROJECT ? null : filter.projectId },
+          );
           setTasks([...tasks, task]);
           clearBanner();
           render();
@@ -91,18 +123,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     },
   });
 
-  const columnsRoot = el('div', 'kb-columns'); page.append(columnsRoot);
-  const spinnerSlot = el('div'); page.append(spinnerSlot);
-
-  let tasks: Task[] = [];
-  let projects: GuestProject[] = [];
-  let prefs: Prefs = { projectId: ALL_PROJECTS, query: '', openTaskId: null };
-  let filter: BoardFilter = { projectId: ALL_PROJECTS, query: '' };
-  let detail: { dispose: () => void } | null = null;
-  let draggingId: string | null = null;
-  let disposed = false;
-
-  /** The one place `tasks` changes, so the session/worktree watchers always see the current set. */
+  /**
+   * The one place `tasks` changes, so the session/worktree watchers always see the current set.
+   */
   const setTasks = (next: Task[]) => {
     tasks = next;
     sessionSync.sync(tasks);
@@ -168,8 +191,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       })
       .catch((error) => { notify(error); void reload(); });
     setTasks(tasks.filter((candidate) => candidate.id !== task.id));
-    detail?.dispose();
-    detail = null;
+    if (prefs.openTaskId === task.id) { detail?.dispose(); detail = null; }
     render();
     return true;
   };
@@ -214,7 +236,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
    * How many `startSession` calls (for any task) are currently in flight.
    * While this is above zero, adoption is paused — not just guarded by
    * `attemptedSessions`, which can only be populated *after* `startSession`
-   * resolves with the session's id. The host can report the session it is
+   * resolves with the session's id. The host can report the new session it is
    * in the middle of creating to this mount's own live orphan watcher
    * before that promise resolves, so without this, a session this very
    * call is about to claim as its own task's link can be adopted as a
@@ -332,6 +354,61 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     void saveTask(host, updated).catch((error) => notify(error));
   };
 
+  // ---- Shared mutations (page + rail): create, move, delete ----
+
+  const dropTask = async (id: string, status: TaskStatus, beforeId: string | null) => {
+    const visible = (currentSections?.[status] ?? []).map((item) => item.task);
+    const planned = planMove(tasks, id, status, beforeId, visible);
+    if (!planned) return;
+    setTasks(planned.next);
+    render();
+    try {
+      await saveMove(host, planned.next, id, planned.plan);
+    } catch (error) {
+      notify(error);
+      void reload();
+    }
+  };
+
+  /** The ⋯ menu's Move-to: a status change that keeps its rank, marker cleared — as on the rail. */
+  const moveTaskByMenu = async (task: Task, status: TaskStatus) => {
+    const moved = statusMove(task, status);
+    if (!moved) return;
+    try { await saveTask(host, moved); }
+    catch (error) { notify(error); void reload(); return; }
+    setTasks(tasks.map((t) => (t.id === task.id ? moved : t)));
+    render();
+  };
+
+  /** The shared delete protocol: dismiss the linked session first, roll back on failure. */
+  const deleteTaskForTask = async (task: Task) => {
+    try {
+      await deleteTaskWithDismissal(host, task, dismissedSessionIds);
+    } catch (error) { notify(error); return; }
+    if (prefs.openTaskId === task.id) closeDetail();
+    setTasks(tasks.filter((t) => t.id !== task.id));
+    render();
+    void host.toast({ kind: 'info', message: `Deleted "${task.title}".` }).catch(() => undefined);
+  };
+
+  const updateBadge = (sections: BoardSections) => {
+    // The mounted badge describes what is on screen; the extension-tab badge
+    // counts open tasks board-wide, the same signal from either surface.
+    const open = countOpen(sections);
+    const unseen = countUnseen(sections);
+    const counts = badgeForCounts(open, unseen);
+    badge.update({ label: counts.label, tone: counts.tone });
+    const openAll = tasks.filter((task) => task.status !== 'done').length;
+    void host.setBadge(openAll || null).catch(() => undefined);
+  };
+
+  const render = () => {
+    const sections = buildBoardView(tasks, sessionSync.live(), filter);
+    currentSections = sections;
+    updateBadge(sections);
+    board.render(sections);
+  };
+
   const openDetail = (id: string) => {
     const found = tasks.find((t) => t.id === id);
     if (!found) return;
@@ -342,43 +419,23 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     detail = mountTaskDetail(root, {
       task,
       projects: projects.map((p) => ({ id: p.id, name: p.name })),
+      compact: false,
       onClose: closeDetail,
       // Voice dictation for the description field; absent when the host did
       // not offer the microphone feature (the mic button then never renders).
       dictation: options?.microphoneSupported ? dictation : null,
       onToast: (message, kind) => { void host.toast({ kind, message }).catch(() => undefined); },
       onSave: async (patch) => {
-        const updated = applyPatch(task, patch);
-        await saveTask(host, updated);
-        setTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
+        const patched = patchTask(tasks, task.id, patch);
+        if (!patched) return;
+        await saveTask(host, patched.task);
+        setTasks(patched.next);
         render();
         closeDetail();
         openDetail(task.id);
       },
       onDelete: async () => {
-        const sessionId = task.sessionId;
-        const alreadyDismissed = sessionId !== null && dismissedSessionIds.has(sessionId);
-        if (sessionId && !alreadyDismissed) {
-          // Persist the dismissal before removing the task. The orphan watcher
-          // can receive a session snapshot at any time, including during this
-          // delete, and must see the exclusion before the task link disappears.
-          dismissedSessionIds.add(sessionId);
-          try {
-            await saveDismissedSessions(host, dismissedSessionIds);
-          } catch (error) {
-            dismissedSessionIds.delete(sessionId);
-            throw error;
-          }
-        }
-        try {
-          await deleteTask(host, task.id);
-        } catch (error) {
-          if (sessionId && !alreadyDismissed) {
-            dismissedSessionIds.delete(sessionId);
-            void saveDismissedSessions(host, dismissedSessionIds).catch(() => undefined);
-          }
-          throw error;
-        }
+        await deleteTaskWithDismissal(host, task, dismissedSessionIds);
         setTasks(tasks.filter((t) => t.id !== task.id));
         closeDetail();
         render();
@@ -387,7 +444,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         // Awaited, not fire-and-forget, and before navigating away — `host.openSession`
         // can tear this page down as part of the same call, before a fire-and-forget
         // write actually reaches the host, which would leave the old value persisted
-        // and this task reopening the next time the board loads.
+        // and this task reopening the next time the board loads. The marker was
+        // already cleared when the dialog opened (see `openDetail`).
         await persistOpenTask(null);
         await host.openSession(sessionId);
         closeDetail();
@@ -398,10 +456,11 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         // The project is stored too: without it, neither the live status/unlink watchers
         // nor reconciliation can cover a task linked this way.
         attemptedSessions.add(sessionId);
-        const updated = applyPatch(task, {
+        const current = tasks.find((t) => t.id === task.id) ?? task;
+        const updated = applyPatch(current, {
           sessionId,
           ...(sessionProjectId ? { projectId: sessionProjectId } : {}),
-          status: task.status === 'backlog' ? 'todo' : task.status,
+          status: current.status === 'backlog' ? 'todo' : current.status,
         });
         await saveTaskRetrying(updated);
         if (dismissedSessionIds.delete(sessionId)) {
@@ -411,15 +470,16 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
           try { await saveDismissedSessions(host, dismissedSessionIds); }
           catch { dismissedSessionIds.add(sessionId); }
         }
-        setTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
+        setTasks(tasks.map((t) => (t.id === current.id ? updated : t)));
         render();
         closeDetail();
         openDetail(task.id);
       },
       onUnlinkSession: async () => {
-        const updated = applyPatch(task, { sessionId: null });
-        await saveTask(host, updated);
-        setTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
+        const patched = patchTask(tasks, task.id, { sessionId: null });
+        if (!patched) return;
+        await saveTask(host, patched.task);
+        setTasks(patched.next);
         render();
         closeDetail();
         openDetail(task.id);
@@ -522,9 +582,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         render();
         // The session was created, but `text` (the description) may not have
         // reached it — `startSession` reports this itself; it is not something
-        // retrying from here can fix (there is no "send a message to this
-        // session" call), so the best this can do is tell you plainly. The
-        // description itself isn't lost: it's still right here on the task.
+        // retrying from here can fix (there is no "send a message to an
+        // existing session" call), so the best this can do is tell you plainly. The description itself isn't lost: it's still right here on the task.
         const deliveryIssue = describeStartSessionDelivery(result.sent);
         if (deliveryIssue) {
           void host.toast({
@@ -537,100 +596,6 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         await host.openSession(result.sessionId);
         closeDetail();
       },
-    });
-  };
-
-  const moveTask = async (id: string, status: TaskStatus, beforeId: string | null, visibleColumn: Task[]) => {
-    const plan = planDrop(visibleColumn, id, beforeId);
-    const current = tasks.find((t) => t.id === id);
-    if (!current) return;
-    const rebalanceMap = new Map(plan.rebalance.map((entry) => [entry.id, entry.rank]));
-    const next = tasks.map((task) => {
-      // A manual drag is itself an acknowledgment, same as opening the card.
-      if (task.id === id) return applyPatch(task, { status, rank: plan.rank, needsAttentionSince: null });
-      const newRank = rebalanceMap.get(task.id);
-      return newRank === undefined ? task : applyPatch(task, { rank: newRank });
-    });
-    setTasks(next);
-    render();
-    try {
-      await saveTask(host, next.find((t) => t.id === id)!);
-      await Promise.all(plan.rebalance.map((entry) => saveTask(host, next.find((t) => t.id === entry.id)!)));
-    } catch (error) {
-      notify(error);
-      void reload();
-    }
-  };
-
-  const updateBadge = () => {
-    const openCount = tasks.filter((t) => t.status !== 'done').length;
-    void host.setBadge(openCount || null).catch(() => undefined);
-  };
-
-  const render = () => {
-    columnsRoot.replaceChildren();
-    const columns = groupColumns(tasks, filter);
-    updateBadge();
-    for (const status of STATUSES) {
-      const column = el('div', 'kb-column');
-      column.dataset.status = status;
-      const head = el('div', 'kb-column-head');
-      head.append(el('span', 'kb-column-title', STATUS_LABELS[status]));
-      head.append(el('span', 'kb-column-count', String(columns[status].length)));
-      const body = el('div', 'kb-column-body');
-      column.append(head, body);
-      if (columns[status].length === 0) body.append(el('div', 'kb-column-empty', 'No tasks'));
-      for (const task of columns[status]) body.append(renderCard(task));
-      wireDropZone(column, body, status, () => columns[status]);
-      columnsRoot.append(column);
-    }
-  };
-
-  const renderCard = (task: Task) => {
-    const card = el('div', task.needsAttentionSince !== null ? 'kb-card kb-card-needs-attention' : 'kb-card');
-    card.draggable = true;
-    card.dataset.id = task.id;
-    card.append(el('div', 'kb-card-title', task.title));
-    const meta = el('div', 'kb-card-meta');
-    const project = task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? task.projectId : null;
-    if (project) meta.append(el('span', 'kb-muted', project));
-    if (task.sessionId) meta.append(el('span', 'kb-mono', `session:${task.sessionId.slice(0, 8)}`));
-    card.append(meta);
-    if (!task.sessionId) card.append(el('p', 'kb-muted', 'No session yet — click to start an agent or link one.'));
-    card.addEventListener('click', () => {
-      // A click anywhere on the card opens its detail — never the linked session directly.
-      openDetail(task.id);
-    });
-    card.addEventListener('dragstart', (event) => {
-      draggingId = task.id;
-      card.classList.add('kb-dragging');
-      event.dataTransfer?.setData('text/plain', task.id);
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-    });
-    card.addEventListener('dragend', () => { draggingId = null; card.classList.remove('kb-dragging'); });
-    return card;
-  };
-
-  const wireDropZone = (column: HTMLElement, body: HTMLElement, status: TaskStatus, visible: () => Task[]) => {
-    column.addEventListener('dragover', (event) => {
-      if (!draggingId) return;
-      event.preventDefault();
-      column.classList.add('kb-dragover');
-    });
-    column.addEventListener('dragleave', (event) => {
-      if (event.target === column) column.classList.remove('kb-dragover');
-    });
-    column.addEventListener('drop', (event) => {
-      event.preventDefault();
-      column.classList.remove('kb-dragover');
-      const id = draggingId ?? event.dataTransfer?.getData('text/plain') ?? null;
-      draggingId = null;
-      if (!id) return;
-      const rects = [...body.querySelectorAll<HTMLElement>('.kb-card')]
-        .filter((node) => node.dataset.id !== id)
-        .map((node) => ({ id: node.dataset.id!, ...node.getBoundingClientRect() }));
-      const beforeId = insertionTarget(rects, event.clientY);
-      void moveTask(id, status, beforeId, visible());
     });
   };
 
@@ -751,6 +716,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       worktreeSync.dispose();
       orphanWatcher?.dispose();
       detail?.dispose();
+      board.dispose();
     },
   };
 };

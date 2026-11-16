@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPatch, createTask, newTaskId, parseTask, type Task } from '../src/domain/task.ts';
-import { ALL_PROJECTS, byReviewUrgency, NO_PROJECT, groupColumns, planDrop, rankAtEnd } from '../src/domain/board.ts';
+import { planDrop, rankAtEnd } from '../src/domain/board.ts';
 
 const make = (title: string, extra: Partial<Task> = {}, rank = 1024): Task => ({
   ...createTask({ title }, rank, 1000, newTaskId(1000 + Math.floor(Math.random() * 1e6))),
@@ -55,21 +55,6 @@ test('applyPatch updates only patched fields and bumps updatedAt', () => {
   assert.throws(() => applyPatch(task, { status: 'nope' as never }));
 });
 
-test('groupColumns filters by project and query and sorts by rank', () => {
-  const a = make('alpha', { projectId: 'p1', rank: 3 });
-  const b = make('beta', { projectId: 'p1', rank: 1 });
-  const c = make('gamma', { projectId: 'p2', status: 'done' });
-  const d = make('delta', { projectId: null });
-  const all = groupColumns([a, b, c, d], { projectId: ALL_PROJECTS, query: '' });
-  assert.deepEqual(all.backlog.map((t) => t.title), ['beta', 'alpha', 'delta']);
-  assert.deepEqual(all.done.map((t) => t.title), ['gamma']);
-  const p1 = groupColumns([a, b, c, d], { projectId: 'p1', query: '' });
-  assert.deepEqual(p1.backlog.map((t) => t.title), ['beta', 'alpha']);
-  assert.equal(p1.done.length, 0);
-  assert.deepEqual(groupColumns([a, b, c, d], { projectId: NO_PROJECT, query: '' }).backlog.map((t) => t.title), ['delta']);
-  assert.deepEqual(groupColumns([a, b, c, d], { projectId: ALL_PROJECTS, query: 'ALP' }).backlog.map((t) => t.title), ['alpha']);
-});
-
 test('planDrop places between neighbours, at ends, and into empty columns', () => {
   const x = make('x', { rank: 100 });
   const y = make('y', { rank: 200 });
@@ -98,23 +83,4 @@ test('rankAtEnd appends after the highest rank in that status', () => {
   const y = make('y', { rank: 50, status: 'backlog' });
   assert.equal(rankAtEnd([x, y], 'todo'), 10 + 1024);
   assert.equal(rankAtEnd([x, y], 'review'), 1024);
-});
-
-test('byReviewUrgency puts the most recently unreviewed first, reviewed ones after, by rank', () => {
-  const older = make('older unreviewed', { needsAttentionSince: 100, rank: 1 });
-  const newer = make('newer unreviewed', { needsAttentionSince: 500, rank: 2 });
-  const reviewedA = make('reviewed a', { needsAttentionSince: null, rank: 5 });
-  const reviewedB = make('reviewed b', { needsAttentionSince: null, rank: 1 });
-  const order = [reviewedA, older, reviewedB, newer].sort(byReviewUrgency).map((t) => t.title);
-  assert.deepEqual(order, ['newer unreviewed', 'older unreviewed', 'reviewed b', 'reviewed a']);
-});
-
-test('groupColumns sorts only the review column by urgency; every other column stays rank-ordered', () => {
-  const stale = make('stale', { status: 'review', needsAttentionSince: 100, rank: 999 });
-  const fresh = make('fresh', { status: 'review', needsAttentionSince: 900, rank: 1 });
-  const todoLow = make('todo-low', { status: 'todo', rank: 5 });
-  const todoHigh = make('todo-high', { status: 'todo', rank: 1 });
-  const columns = groupColumns([stale, fresh, todoLow, todoHigh], { projectId: ALL_PROJECTS, query: '' });
-  assert.deepEqual(columns.review.map((t) => t.title), ['fresh', 'stale']);
-  assert.deepEqual(columns.todo.map((t) => t.title), ['todo-high', 'todo-low']);
 });

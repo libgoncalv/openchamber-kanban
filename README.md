@@ -17,7 +17,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 - You can also link an already-running chat to a task, instead of starting a new one.
 - Start a session from a task on this board, and it stays linked to that task. It does not create another task. Start a session from the OpenChamber sidebar, and the board can add a new task for it automatically, as described below.
 - Delete a session in the OpenChamber sidebar — the linked task is deleted automatically. Archive a session, or delete a worktree — the corresponding link is cleared and the task stays on the board. You can start a new agent for it, or link another session.
-- Move a task to any column two ways: drag the card, or open the task and click one of the "Move to" buttons. There is one button for every column.
+- Move a task to any column three ways: drag the card, the ⋯ menu on it, or open the task and click one of the "Move to" buttons. One button for every column; the ⋯ menu exists on every card and every panel row.
 
 
 
@@ -27,17 +27,17 @@ All your data stays on your own OpenChamber server. This extension does not send
 <img width="1557" height="870" alt="Screenshot 2026-10-15 at 4 01 49 PM" src="https://github.com/user-attachments/assets/02899ebb-71da-4d9a-9a8a-c609de1a7ef1" />
 
 
-### The sidebar panel is a mini board
+### The sidebar panel is the board, filtered to your project
 
-The narrow Kanban panel next to your session list shows the board's five columns again, stacked from top to bottom so they fit in one column. Each column folds up or down, and its header shows the count. Backlog, To Do, and Done start folded; In Progress and Review start open. Your folding is remembered.
+The narrow Kanban panel next to your session list is the same board, just laid out for a narrow column and locked to the project OpenChamber currently has open. The same five columns appear stacked from top to bottom; each folds up or down and its header shows the count. On the full page the scope is a filter you can change; here it follows the open project. Backlog, To Do, and Done start folded, In Progress and Review start open, and your folding is remembered.
 
-Each task is a slim row: its title, its project, and one live line about the agent — running, retrying, needs your answer, needs permission, finished. Rows that need your review carry the same orange border as on the board, and the badge turns orange while unseen rows wait. Click a row to jump straight into its chat (this clears the look-at-this flag, same as opening the task on the board), or click **Mark done** on an unseen row.
+A "Project: …" line under the header names the focused project. When no project is open, every task shows, with the project named on each row.
 
-The panel shows the project OpenChamber currently has open. A "Project: …" line under the header says which one; tasks of other projects wait on the full board. When no project is open, every task shows again, with the project named on each row.
+Every task shows the same information on both the page and the panel: its title, its project, and one live line about the agent — running, retrying, needs your answer, needs permission, finished. Rows that need your review carry the same orange border as on the page, and the badge turns orange while unseen rows wait. Click a row to jump straight into its chat (this clears the look-at-this flag, same as opening a task on the page).
 
-The panel follows agents in real time. If an agent finishes while the full board is closed, the row already sits under Review with a small "→ Review" tag. The panel itself never saves these agent moves — the full board stays the one place that writes them down the next time you open it. What it does save are your own actions: quick-added tasks, drag and menu moves, **Mark done**, deletes, and clearing the unseen flag when you open a chat.
+The panel follows agents in real time. If an agent finishes while the page is closed, the row already sits under Review with a small "→ Review" tag. The panel itself never saves these agent moves — the full page stays the one place that writes them down the next time you open it. What it does save are your own actions: quick-added tasks, drag and menu moves, **Mark done**, deletes, and clearing the unseen flag when you open a chat.
 
-You can also use the panel as a board, not just a summary. Type a title into **Quick add** and press Enter — a real task is created right away in Backlog, in the project currently open. Drag a row onto another column to move it (drop it on a folded column's header to add it at the end; drags reuse the full board's ordering rules), or open the ⋯ menu on a row and pick a **Move to** action without dragging. Deleting is in the same menu, shown in red; if the task had a linked agent chat, it will not come back as an automatic new card afterwards.
+You can use the panel as a small board. Type a title into **Quick add** and press Enter — a real task is created right away in Backlog, in the project currently open. Drag a row onto another column to move it (drop it on a folded column's header to add it at the end; drags reuse the page's ordering rules exactly), or open the ⋯ menu on a row: pick a **Move to** action without dragging, choose **Edit task** to open the same detail dialog as on the page (compact for the rail — it has everything except **Start Agent**, which stays page-only where the branch/worktree pickers fit), or **Delete task** (shown in red; if the task had a linked agent chat, it will not come back as an automatic new card afterwards).
 
 ### The Review column moves on its own
 
