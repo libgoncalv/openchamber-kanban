@@ -1,7 +1,8 @@
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject } from '@openchamber/sdk';
 import { applyHostReady, mountBadge } from '@openchamber/sdk/ui';
-import { loadTasks } from './store/taskStore.ts';
+import { loadTasks, saveTask } from './store/taskStore.ts';
+import { statusMove } from './store/taskOps.ts';
 import { ALL_PROJECTS, matchesFilter } from './domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen } from './domain/boardView.ts';
 import type { Task } from './domain/task.ts';
@@ -13,12 +14,13 @@ import { injectStyles } from './ui/styles.ts';
 import { el } from './ui/dom.ts';
 
 /**
- * The rail panel is a pure display mirror of the board, project-locked: the
- * same kanban view the full screen page renders (`kanbanView` rail mode
- * with no action handlers — nothing there clicks, edits, moves, or deletes),
- * showing whichever project OpenChamber currently has open. It writes
- * nothing and opens nothing: the full screen page (Extension pages menu) is
- * the only surface where tasks are opened, edited, moved, created, or
+ * The rail panel is a display mirror of the board, project-locked: the same
+ * kanban view the full screen page renders (`kanbanView` rail mode), showing
+ * whichever project OpenChamber currently has open. It writes exactly one
+ * thing — the ✓ a row carries marks the task Done, at the user's own click,
+ * through the same kept-rank status move the ⋯ menu takes — and it opens
+ * nothing: the full screen page (Extension pages menu) is still the only
+ * surface where tasks are opened, edited, moved (other columns), created, or
  * deleted. What it does update by itself is what it shows: live agent state
  * per linked session, regrouped for display only — the → chip marks a move
  * the board page will persist the next time it opens.
@@ -102,19 +104,37 @@ host.onReady((ctx) => {
   unseenLine = el('p', 'kb-panel-unseen');
   wrap.append(unseenLine);
 
-  // The only handler is display data. No onActivate, no menu, no drops, no
-  // folding: the renderer draws rows with no affordance at all
-  // (kanbanView's presence-based handlers).
+  // The handlers are display data, plus the panel's single deliberate write
+  // (`onMarkDone` — see below). No activation, no menu, no drops, no folding:
+  // the renderer draws everything else with no affordance at all.
   board = mountKanbanView(wrap, 'rail', {
     // Per-row project names matter only in show-all mode; scoped to one
     // project the header line names it once and the row line stays purely
     // about the agent.
     projectName: (task) =>
       (!currentProject && task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? null : null),
+    onMarkDone: async (task) => {
+      // The rail's one write: a deliberate Done the same way the ⋯ menu's
+      // Move-to and the status strip take it — rank kept, attention marker
+      // cleared (`statusMove`), `null` when this would change nothing. The
+      // closed-over list is re-read first so a write racing another surface's
+      // save lands on the task's newest stored shape.
+      const current = tasks.find((t) => t.id === task.id) ?? task;
+      const moved = statusMove(current, 'done');
+      if (!moved) return;
+      try { await saveTask(host, moved); }
+      catch (error) {
+        void host.toast({ kind: 'error', message: `Could not mark "${current.title}" done — ${describeHostError(error)}` }).catch(() => undefined);
+        void reload();
+        return;
+      }
+      applyTasks(tasks.map((t) => (t.id === current.id ? moved : t)));
+      render();
+    },
   });
 
   const foot = el('div', 'kb-rail-foot');
-  foot.append(el('p', 'kb-muted', 'Tracking only — the full board (Extension pages menu) is where tasks are opened and changed.'));
+  foot.append(el('p', 'kb-muted', 'One quick write lives here — the ✓ marks a task Done. Everything else (open, move, edit, delete) is the full board, from the Extension pages menu.'));
   wrap.append(foot);
   root.append(wrap);
 

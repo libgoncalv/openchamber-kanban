@@ -30,8 +30,14 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50}
 .kb-dialog{background:var(--oc-bg);color:var(--oc-fg);border:1px solid var(--oc-border);border-radius:12px;max-width:640px;width:100%;max-height:88vh;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
 .kb-dialog h2{margin:0;font-size:18px;letter-spacing:-.01em}
+.kb-dialog:focus{outline:none}
 .kb-dialog-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .kb-dialog-grid .kb-span2{grid-column:1/-1}
+/* Dialog head: task title over a mono id/project sub line, agent pill beside. */
+.kb-dialog-head{display:flex;align-items:flex-start;gap:10px}
+.kb-dialog-head-main{flex:1;min-width:0}
+.kb-dialog-sub{font:11px var(--oc-mono);color:var(--oc-muted);overflow-wrap:anywhere;margin-top:2px}
+.kb-dialog-head .kb-agent-pill{margin-top:2px}
 /* Compact variant for a narrow host surface (the rail panel's Edit dialog):
    single column, tighter rhythm — the same dialog otherwise. */
 .kb-dialog-compact{max-width:100%;padding:14px;gap:10px}
@@ -51,6 +57,17 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-radio-option input{margin-top:3px;accent-color:var(--oc-primary)}
 .kb-radio-title{font-weight:550;font-size:13px}
 .kb-radio-desc{font-size:12px;color:var(--oc-muted);margin-top:2px}
+/* The status strip in the task dialog: one pressed button per status; a press
+   moves immediately (the deliberate-move path), the pressed one is inert. */
+.kb-status-seg{display:flex;align-items:stretch;gap:4px;flex-wrap:wrap}
+.kb-status-seg-btn{flex:1 1 88px;min-height:30px;padding:5px 10px;font:inherit;font-size:12px;font-weight:550;color:var(--oc-muted);background:transparent;border:1px solid var(--oc-border);border-radius:calc(var(--oc-radius,10px) - 3px);cursor:pointer}
+.kb-status-seg-btn:hover{background:var(--oc-hover);color:var(--oc-fg)}
+.kb-status-seg-btn:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+.kb-status-seg-btn[aria-pressed="true"]{background:var(--oc-primary);border-color:transparent;color:var(--oc-primary-fg,#fff);cursor:default}
+.kb-status-seg-btn[aria-pressed="true"]:hover{background:var(--oc-primary);color:var(--oc-primary-fg,#fff)}
+/* The linked-session row in the task dialog: the chat's title over its mono id. */
+.kb-session-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.kb-session-title{font-weight:600;font-size:13px;overflow-wrap:anywhere}
 .kb-banner{display:none}
 .kb-banner[data-show]{display:block}
 // Dictation panel (OpenChamber's composer dictation look, adapted to this
@@ -78,8 +95,9 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-dict-spin{width:14px;height:14px;flex:none;border:2px solid var(--oc-border);border-top-color:var(--oc-muted);border-radius:99px;animation:kb-spin 1s linear infinite}
 @keyframes kb-spin{to{transform:rotate(360deg)}}
 /* Rail panel (kb-rail on kb-page): the board's five views stacked as collapsible
-   sections with slim interactive rows — a tap opens the task's chat, and
-   deliberate taps (Mark done) are the only writes the panel ever makes. */
+   sections with slim rows. The ✓ at a row's edge is the panel's one write
+   (Mark done — deliberate, at the user's own click); every other deliberate
+   action lives on the full board. */
 .kb-rail{gap:10px;padding:12px 14px}
 .kb-rail h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
 .kb-rail-scope{margin:0;font-size:11px;color:var(--oc-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -97,16 +115,24 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-panel-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:8px}
 .kb-panel-row.kb-attn{border-color:var(--oc-warning,#e5a234);border-left-width:3px}
 .kb-panel-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
-.kb-panel-title{font-weight:550;font-size:13px;overflow-wrap:anywhere}
-.kb-panel-sub{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--oc-muted);min-width:0}
+.kb-panel-title{font-weight:600;font-size:13px;overflow-wrap:anywhere}
+.kb-panel-sub{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--oc-muted);min-width:0}
 .kb-panel-project{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kb-panel-sep{color:var(--oc-muted)}
-.kb-panel-dot{width:6px;height:6px;border-radius:99px;background:var(--oc-muted);flex:none}
-.kb-panel-dot[data-state="running"]{background:var(--oc-success,var(--status-success,#46a758))}
-.kb-panel-dot[data-state="waiting"]{background:var(--oc-warning,#e5a234);animation:kb-panel-pulse 1.4s ease-in-out infinite}
-.kb-panel-dot[data-state="failed"]{background:var(--oc-error,var(--status-error,#e5484d))}
-@keyframes kb-panel-pulse{0%,100%{opacity:1}50%{opacity:.35}}
-.kb-panel-live{white-space:nowrap}
+/* The agent-state pill — one renderer (ui/pill.ts), everywhere: item meta
+   line on cards and rail rows, the task dialog's head. Tints ride the host
+   theme's --oc-* status tokens (applyHostReady paints them on the frame
+   root; -text where the theme supplies one) and a glyph per state so the two
+   waiting states separate at a glance. */
+.kb-agent-pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:9999px;font-size:10.5px;font-weight:550;letter-spacing:.01em;white-space:nowrap;flex:none}
+.kb-agent-pill[data-tone="info"]{color:var(--oc-info-text,var(--oc-info,#5b9cf6));background:color-mix(in srgb,var(--oc-info,#5b9cf6) 13%,transparent)}
+.kb-agent-pill[data-tone="warning"]{color:var(--oc-warning-text,var(--oc-warning,#e5a234));background:color-mix(in srgb,var(--oc-warning,#e5a234) 13%,transparent)}
+.kb-agent-pill[data-tone="error"]{color:var(--oc-error-text,var(--oc-error,#e5484d));background:color-mix(in srgb,var(--oc-error,#e5484d) 13%,transparent)}
+.kb-agent-pill[data-tone="success"]{color:var(--oc-success-text,var(--oc-success,#46a758));background:color-mix(in srgb,var(--oc-success,#46a758) 13%,transparent)}
+.kb-agent-pill svg{width:10px;height:10px;display:block}
+.kb-agent-glyph{width:11px;height:11px;border:1.4px solid currentColor;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:800;line-height:1;flex:none}
+.kb-agent-dotg{width:4px;height:4px;border-radius:9999px;background:currentColor;flex:none;margin:0 2px}
+.kb-agent-spin{animation:kb-spin 1.2s linear infinite;transform-origin:center}
+@media (prefers-reduced-motion:reduce){.kb-agent-spin{animation:none}}
 .kb-panel-chip{flex:none;font-size:10px;font-weight:500;color:var(--oc-warning,#e5a234);background:color-mix(in srgb,var(--oc-warning,#e5a234) 13%,transparent);padding:1px 6px;border-radius:9999px}
 .kb-rail-foot{display:flex;align-items:center;gap:10px;justify-content:space-between}
 .kb-rail-foot p{margin:0}
@@ -118,27 +144,32 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
   .kb-psec-head{min-height:36px}
   .kb-panel-row{min-height:44px}
   .kb-panel-menu{opacity:1}
-  /* Touch has no hover: a muted ✓ is a button always, not only on reveal. */
+  /* Touch has no hover: the page card's quiet ✓ is a button always, not only on reveal. */
   .kb-card .kb-iconbtn[data-quiet="true"]{opacity:1}
 }
 /* Small square icon buttons — the ✓ beside the ⋯ menu on page cards and the
-   rail attention actions — reusing the dictation panel's icon-button idiom.
+   rail's mark-done ✓ — reusing the dictation panel's icon-button idiom.
    A hint ✓ (data-hint) is success-tinted and always visible: it IS the
    suggestion. A quiet ✓ (data-quiet) is muted and revealed on hover/focus,
    the same reveal rule as the ⋯ menu, sinking under it as the smaller
-   affordance. */
+   affordance. An info ✓ (data-info) tints with the app's info tone and never
+   hides: the rail's one always-visible affordance. */
 .kb-iconbtn{width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--oc-muted);border:1px solid var(--oc-border);border-radius:calc(var(--oc-radius,10px) - 4px);cursor:pointer;flex:none}
 .kb-iconbtn svg{width:12px;height:12px;display:block}
 .kb-iconbtn:hover{color:var(--oc-fg);background:var(--oc-hover)}
 .kb-iconbtn:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
 .kb-iconbtn[data-hint="true"]{color:var(--oc-success,var(--status-success,#46a758));border-color:color-mix(in srgb,var(--oc-success,var(--status-success,#46a758)) 38%,transparent)}
 .kb-iconbtn[data-hint="true"]:hover{color:var(--oc-success,var(--status-success,#46a758));background:color-mix(in srgb,var(--oc-success,var(--status-success,#46a758)) 12%,transparent)}
+/* Tinted with the app's info tone (blue in its themes): the rail's always-visible mark-done ✓. */
+.kb-iconbtn[data-info="true"]{color:var(--oc-info-text,var(--oc-info,#5b9cf6));border-color:color-mix(in srgb,var(--oc-info,#5b9cf6) 38%,transparent);background:color-mix(in srgb,var(--oc-info,#5b9cf6) 13%,transparent)}
+.kb-iconbtn[data-info="true"]:hover{background:color-mix(in srgb,var(--oc-info,#5b9cf6) 22%,transparent)}
 .kb-iconbtn[data-primary="true"]{background:var(--oc-primary);border-color:transparent;color:var(--oc-primary-fg,#fff)}
 .kb-iconbtn[data-primary="true"]:hover{color:var(--oc-primary-fg,#fff)}
 .kb-card .kb-iconbtn[data-quiet="true"]{opacity:0;transition:opacity 120ms ease-out}
 .kb-card:hover .kb-iconbtn[data-quiet="true"],.kb-card:focus-within .kb-iconbtn[data-quiet="true"]{opacity:1}
 .kb-panel-actions{display:flex;gap:6px;align-items:center;flex:none}
-/* Rail rows carry the same buttons at the 26px touch size. */
+/* Rail rows carry the same buttons at the 26px touch size; the ✓ (data-info)
+   rides them at every non-done row's right edge and never hides. */
 .kb-panel-row .kb-iconbtn{width:26px;height:26px}
 .kb-panel-row .kb-iconbtn svg{width:13px;height:13px}
 /* The rail's looks-done chip speaks success, unlike the warning → Review chip. */

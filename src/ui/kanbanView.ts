@@ -1,7 +1,8 @@
 import type { MenuItem } from '@openchamber/sdk/ui';
 import { mountMenu } from '@openchamber/sdk/ui';
-import { describeActivity, type BoardItem, type BoardSections } from '../domain/boardView.ts';
+import { describeActivity, type ActivityKey, type ActivityLine, type BoardItem, type BoardSections } from '../domain/boardView.ts';
 import { STATUSES, STATUS_LABELS, type Task, type TaskStatus } from '../domain/task.ts';
+import { agentPill } from './pill.ts';
 import { insertionTarget } from './dnd.ts';
 import { el } from './dom.ts';
 
@@ -15,7 +16,7 @@ import { el } from './dom.ts';
  * a surface that passes none (the rail: a pure display mirror) renders the
  * identical layout with nothing to click.
  * Everything the two surfaces must never disagree on lives here: the item
- * body (title, project line, live agent line, → chip), the ⋯ menu
+ * body (title, project line, agent pill, → chip), the ⋯ menu
  * structure, the drop math, keyboard activation, and the attention flag.
  * Only the layout differs, because the width does.
  */
@@ -30,20 +31,18 @@ export type KanbanHandlers = {
   /** ⋯ → Move to …: a status change that keeps its rank — the detail popup's Move-to semantics. Absent — no move items. */
   onMoveStatus?: (task: Task, status: TaskStatus) => void;
   /** ⋯ → Delete task: the shared dismissal-before-delete protocol sits behind this. Absent — no delete item. */
-  onDelete?: (task: Task) => void;
-  /** Drop into `status` before `beforeId` (null = end of what the user can see). Absent — items do not drag and nothing accepts a drop. */
+  onDelete?: (task: Task) => void;  /** Drop into `status` before `beforeId` (null = end of what the user can see). Absent — items do not drag and nothing accepts a drop. */
   onDrop?: (id: string, status: TaskStatus, beforeId: string | null) => void;
   /** Rail only — a drop on a section header appends at the column's end. */
   onDropEnd?: (id: string, status: TaskStatus) => void;
   /** Rail attention rows: open the linked chat without opening any dialog. */
   onOpenChat?: (task: Task) => void;
-  /** Rail attention rows: a deliberate Done — the only way a row tap ever sets it. */
+  /** Rail rows: a deliberate Done — the rail's one write, through the same kept-rank path as the ⋯ menu. */
   onMarkDone?: (task: Task) => void;
   /**
    * Page cards only: the ✓ inside the "looks done" affordance — a deliberate
-   * Done through the same kept-rank path as the ⋯ menu. The rail passes none
-   * and shows the state as a display-only chip instead; the rail surface
-   * performs no writes.
+   * Done through the same kept-rank path as the ⋯ menu. The rail shows the
+   * state as a display-only chip instead, and writes Done through `onMarkDone`.
    */
   onLooksDone?: (task: Task) => void;
   /** The project's display name to show on a row, or null to show none (the rail in scoped mode). */
@@ -82,7 +81,7 @@ const iconButton = (
   path: string,
   label: string,
   onTap: () => void,
-  attrs: { primary?: boolean; hint?: boolean; quiet?: boolean } = {},
+  attrs: { primary?: boolean; hint?: boolean; quiet?: boolean; info?: boolean } = {},
 ): HTMLButtonElement => {
   const button = el('button', 'kb-iconbtn');
   button.type = 'button';
@@ -91,6 +90,7 @@ const iconButton = (
   if (attrs.primary) button.dataset.primary = 'true';
   if (attrs.hint) button.dataset.hint = 'true';
   if (attrs.quiet) button.dataset.quiet = 'true';
+  if (attrs.info) button.dataset.info = 'true';
   button.append(svgGlyph(path));
   button.addEventListener('click', (event) => { event.stopPropagation(); onTap(); });
   return button;
@@ -191,32 +191,30 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     if (project) sub.append(el('span', 'kb-panel-project', project));
     // A chat with no trusted live state has nothing observable to say; say only
     // that it exists rather than inventing an activity.
-    const line = item.live
+    const line: ActivityLine | null = item.live
       ? describeActivity(item.live)
       : task.sessionId
-        ? ({ text: 'chat linked', tone: 'idle' }) as const
+        ? { key: 'linked' as ActivityKey, text: 'chat linked', tone: 'idle' }
         : null;
-    if (line) {
-      if (project) sub.append(el('span', 'kb-panel-sep', '·'));
-      const dot = el('span', 'kb-panel-dot');
-      dot.dataset.state = line.tone;
-      sub.append(dot, el('span', 'kb-panel-live', line.text));
-    }
+    if (line) sub.append(agentPill(line));
     main.append(sub);
 
-    // Attention actions are a small-icon affordance: Open chat (primary) and
-    // Mark done — deliberate taps, the only ones a row offers besides itself.
-    if (rail && item.attention) {
+    // Attention actions are a small-icon affordance: Open chat — a deliberate
+    // tap, the only one an attention row offers besides marking done.
+    if (rail && item.attention && task.sessionId && handlers.onOpenChat) {
+      const onOpenChat = handlers.onOpenChat;
       const actions = el('div', 'kb-panel-actions');
-      if (task.sessionId && handlers.onOpenChat) {
-        const onOpenChat = handlers.onOpenChat;
-        actions.append(iconButton(CHAT_PATH, 'Open chat', () => onOpenChat(task), { primary: true }));
-      }
-      if (item.displayStatus !== 'done' && handlers.onMarkDone) {
-        const onMarkDone = handlers.onMarkDone;
-        actions.append(iconButton(CHECK_DONE_PATH, 'Mark done', () => onMarkDone(task)));
-      }
-      if (actions.childElementCount > 0) main.append(actions);
+      actions.append(iconButton(CHAT_PATH, 'Open chat', () => onOpenChat(task), { primary: true }));
+      main.append(actions);
+    }
+
+    // Every non-done rail row carries a mark-done ✓ at its right edge —
+    // always visible, tinted with the app's info tone. This is the rail's one
+    // deliberate write: Done stays a user-only click on every surface; Done
+    // rows show no affordance because they need none.
+    if (rail && item.displayStatus !== 'done' && handlers.onMarkDone) {
+      const onMarkDone = handlers.onMarkDone;
+      top.append(iconButton(CHECK_DONE_PATH, 'Mark done', () => onMarkDone(task), { info: true }));
     }
 
     // The rail's display-only chip. The looks-done state outranks the agent-move

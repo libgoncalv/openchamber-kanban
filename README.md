@@ -17,7 +17,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 - You can also link an already-running chat to a task, instead of starting a new one.
 - Start a session from a task on this board, and it stays linked to that task. It does not create another task. Start a session from the OpenChamber sidebar, and the board can add a new task for it automatically, as described below.
 - Delete a session in the OpenChamber sidebar — the linked task is deleted automatically. Archive a session, or delete a worktree — the corresponding link is cleared and the task stays on the board. You can start a new agent for it, or link another session.
-- Move a task to any column three ways: drag the card, the ⋯ menu on it, or open the task and click one of the "Move to" buttons. One button for every column. The ⋯ menu exists on every card on the page.
+- Move a task to any column three ways: drag the card, the ⋯ menu on it, or open the task and click the status you want in its Status strip. One click for every column, and the click moves immediately — the same deliberate move the other two make. The ⋯ menu exists on every card on the page.
 
 
 
@@ -33,9 +33,9 @@ The narrow Kanban panel next to your session list shows the same board laid out 
 
 A "Project: …" line under the header names the focused project. When no project is open, every task shows, with the project named on each row.
 
-Every task shows the same information on both the page and the panel: its title, its project, and one live line about the agent — running, retrying, needs your answer, needs permission, finished. Rows that need your review carry the same orange border as on the page, and the badge turns orange while unseen rows wait.
+Every task shows the same information on both the page and the panel: its title, its project, and one colored, glyphed pill about the agent — a spinner for running or retrying, ? for "needs your answer", a shield for "needs permission", ! for failed, ✓ for finished — using the same tones as OpenChamber's own badges. Rows that need your review carry the same orange border as on the page, and the badge turns orange while unseen rows wait.
 
-The panel follows agents in real time. If an agent finishes while the page is closed, the row already sits under Review with a small "→ Review" tag. The panel never saves anything at all — nothing in it clicks, is clickable, or opens: no moving, no quick-add, no deleting, no opening of chats from its rows. It simply tracks. To open a task, start an agent for it, move it, or delete it, use the full board from the Extension pages menu — that is the thinking: the panel is for looking at what the agents are up to in the project you have open, the page is for doing.
+The panel follows agents in real time. If an agent finishes while the page is closed, the row already sits under Review with a small "→ Review" tag. One quick write lives on the panel: every row that is not Done carries a small **blue ✓** at its right edge — always visible, tinted with OpenChamber's own info tone — and a click marks the task Done, exactly like the ✓ on the full board's cards. Done is still a human decision everywhere; the panel never marks anything on its own. It has no other clicks: no opening, no moving, no quick-add, no deleting, no editing. To do anything else, use the full board from the Extension pages menu — that is the thinking: the panel is for looking at what the agents are up to in the project you have open (and for that one fastest-of-all marks), the page is for doing.
 
 ### The Review column moves on its own
 

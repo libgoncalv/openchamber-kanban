@@ -28,7 +28,22 @@ export type SessionLiveState = {
 
 export type ActivityTone = 'running' | 'waiting' | 'failed' | 'idle';
 
-export type ActivityLine = { text: string; tone: ActivityTone };
+/**
+ * Coarse state key behind a live line's text+tone: what the pill renderer
+ * keys its tint and glyph on. `retrying` maps to the `running` key (same
+ * tint, same glyph); `linked` is the no-trusted-snapshot "a chat exists"
+ * fallback the shared renderer builds when `live` is null.
+ */
+export type ActivityKey =
+  | 'running'
+  | 'waiting-question'
+  | 'waiting-permission'
+  | 'failed'
+  | 'finished'
+  | 'idle'
+  | 'linked';
+
+export type ActivityLine = { key: ActivityKey; text: string; tone: ActivityTone };
 
 /**
  * The "looks done" affordance: a linked session finished (`idle` +
@@ -254,14 +269,14 @@ export const badgeForCounts = (open: number, unseen: number): { label: string; t
  */
 export const describeActivity = (state: SessionLiveState): ActivityLine | null => {
   switch (state.activity) {
-    case 'running': return { text: 'running', tone: 'running' };
-    case 'retrying': return { text: 'retrying', tone: 'running' };
-    case 'waiting-question': return { text: 'needs your answer', tone: 'waiting' };
-    case 'waiting-permission': return { text: 'needs permission', tone: 'waiting' };
+    case 'running': return { key: 'running', text: 'running', tone: 'running' };
+    case 'retrying': return { key: 'running', text: 'retrying', tone: 'running' };
+    case 'waiting-question': return { key: 'waiting-question', text: 'needs your answer', tone: 'waiting' };
+    case 'waiting-permission': return { key: 'waiting-permission', text: 'needs permission', tone: 'waiting' };
     case 'idle':
-      if (state.outcome === 'completed') return { text: 'finished', tone: 'idle' };
-      if (state.outcome === 'failed') return { text: 'failed', tone: 'failed' };
-      return { text: 'idle', tone: 'idle' };
+      if (state.outcome === 'completed') return { key: 'finished', text: 'finished', tone: 'idle' };
+      if (state.outcome === 'failed') return { key: 'failed', text: 'failed', tone: 'failed' };
+      return { key: 'idle', text: 'idle', tone: 'idle' };
     default: return null; // 'unknown'
   }
 };

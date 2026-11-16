@@ -447,6 +447,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       task,
       projects: projects.map((p) => ({ id: p.id, name: p.name })),
       compact: false,
+      // The head pill reads this live, so a dialog held open across a state
+      // change still shows the pill that re-rendering the board would show.
+      liveSession: () => (task.sessionId ? sessionSync.live().get(task.sessionId) ?? null : null),
       onClose: closeDetail,
       // Voice dictation for the description field; absent when the host did
       // not offer the microphone feature (the mic button then never renders).

@@ -152,14 +152,15 @@ test('countOpen excludes Done; badgeForCounts tips to warning only while unseen 
   assert.deepEqual(badgeForCounts(3, 0), { label: '3 open', tone: 'neutral' });
 });
 
-test('describeActivity maps every observable state to a row line and tone', () => {
-  assert.deepEqual(describeActivity(state()), { text: 'running', tone: 'running' });
-  assert.deepEqual(describeActivity(state({ activity: 'retrying' })), { text: 'retrying', tone: 'running' });
-  assert.deepEqual(describeActivity(state({ activity: 'waiting-question' })), { text: 'needs your answer', tone: 'waiting' });
-  assert.deepEqual(describeActivity(state({ activity: 'waiting-permission' })), { text: 'needs permission', tone: 'waiting' });
-  assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: 'completed' })), { text: 'finished', tone: 'idle' });
-  assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: 'failed' })), { text: 'failed', tone: 'failed' });
-  assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: null })), { text: 'idle', tone: 'idle' });
+test('describeActivity maps every observable state to a key, a row line and a tone', () => {
+  // The key is what the pill renderer keys its tint and glyph on.
+  assert.deepEqual(describeActivity(state()), { key: 'running', text: 'running', tone: 'running' });
+  assert.deepEqual(describeActivity(state({ activity: 'retrying' })), { key: 'running', text: 'retrying', tone: 'running' });
+  assert.deepEqual(describeActivity(state({ activity: 'waiting-question' })), { key: 'waiting-question', text: 'needs your answer', tone: 'waiting' });
+  assert.deepEqual(describeActivity(state({ activity: 'waiting-permission' })), { key: 'waiting-permission', text: 'needs permission', tone: 'waiting' });
+  assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: 'completed' })), { key: 'finished', text: 'finished', tone: 'idle' });
+  assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: 'failed' })), { key: 'failed', text: 'failed', tone: 'failed' });
+  assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: null })), { key: 'idle', text: 'idle', tone: 'idle' });
   assert.equal(describeActivity(state({ activity: 'unknown' })), null);
 });
 
