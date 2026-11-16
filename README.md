@@ -27,6 +27,16 @@ All your data stays on your own OpenChamber server. This extension does not send
 <img width="1557" height="870" alt="Screenshot 2026-10-15 at 4 01 49 PM" src="https://github.com/user-attachments/assets/02899ebb-71da-4d9a-9a8a-c609de1a7ef1" />
 
 
+### The sidebar panel is a mini board
+
+The narrow Kanban panel next to your session list shows the board's five columns again, stacked from top to bottom so they fit in one column. Each column folds up or down, and its header shows the count. Backlog, To Do, and Done start folded; In Progress and Review start open. Your folding is remembered.
+
+Each task is a slim row: its title, its project, and one live line about the agent — running, retrying, needs your answer, needs permission, finished. Rows that need your review carry the same orange border as on the board, and the badge turns orange while unseen rows wait. Click a row to jump straight into its chat (this clears the look-at-this flag, same as opening the task on the board), or click **Mark done** on an unseen row.
+
+The panel shows the project OpenChamber currently has open. A "Project: …" line under the header says which one; tasks of other projects wait on the full board. When no project is open, every task shows again, with the project named on each row.
+
+The panel follows agents in real time. If an agent finishes while the full board is closed, the row already sits under Review with a small "→ Review" tag. The panel itself never saves these agent moves — the full board stays the one place that writes them down the next time you open it. The only saves the panel ever makes are the things you click: **Mark done**, and clearing the unseen flag when you open a chat.
+
 ### The Review column moves on its own
 
 Some tasks move to the **Review** column by themselves. You do not drag them there. This happens when:

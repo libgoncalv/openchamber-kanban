@@ -64,6 +64,53 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-dict-iconbtn[data-primary="true"]:hover{color:var(--oc-primary-fg,#fff)}
 .kb-dict-spin{width:14px;height:14px;flex:none;border:2px solid var(--oc-border);border-top-color:var(--oc-muted);border-radius:99px;animation:kb-spin 1s linear infinite}
 @keyframes kb-spin{to{transform:rotate(360deg)}}
+/* Rail panel (kb-rail on kb-page): the board's five views stacked as collapsible
+   sections with slim interactive rows — a tap opens the task's chat, and
+   deliberate taps (Mark done) are the only writes the panel ever makes. */
+.kb-rail{gap:10px;padding:12px 14px}
+.kb-rail h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
+.kb-rail-scope{margin:0;font-size:11px;color:var(--oc-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-panel-unseen{margin:0;font-size:12px;color:var(--oc-warning,#e5a234)}
+.kb-panel-sections{display:flex;flex-direction:column}
+.kb-psec{display:flex;flex-direction:column}
+.kb-psec+.kb-psec{border-top:1px solid var(--oc-border)}
+.kb-psec-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 2px;background:none;border:0;font:inherit;cursor:pointer;text-align:left}
+.kb-psec-head:hover .kb-psec-name{color:var(--oc-fg)}
+.kb-psec-name{flex:1;min-width:0;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--oc-muted)}
+.kb-psec-count{font:11px var(--oc-mono);color:var(--oc-muted);background:var(--oc-muted-surface);padding:2px 7px;border-radius:9999px}
+.kb-psec-count[data-attn]{color:var(--oc-warning,#e5a234);background:color-mix(in srgb,var(--oc-warning,#e5a234) 14%,transparent)}
+.kb-psec-chevron{width:12px;flex:none;text-align:center;font-size:10px;color:var(--oc-muted)}
+.kb-psec-body{display:flex;flex-direction:column;gap:6px;padding:2px 0 10px}
+.kb-panel-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:8px;cursor:pointer}
+.kb-panel-row:hover{border-color:var(--oc-hover)}
+.kb-panel-row:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+.kb-panel-row.kb-attn{border-color:var(--oc-warning,#e5a234);border-left-width:3px}
+.kb-panel-row.kb-attn:hover{border-color:var(--oc-warning,#e5a234)}
+.kb-panel-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.kb-panel-title{font-weight:550;font-size:13px;overflow-wrap:anywhere}
+.kb-panel-sub{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--oc-muted);min-width:0}
+.kb-panel-project{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-panel-sep{color:var(--oc-muted)}
+.kb-panel-dot{width:6px;height:6px;border-radius:99px;background:var(--oc-muted);flex:none}
+.kb-panel-dot[data-state="running"]{background:var(--oc-success,var(--status-success,#46a758))}
+.kb-panel-dot[data-state="waiting"]{background:var(--oc-warning,#e5a234);animation:kb-panel-pulse 1.4s ease-in-out infinite}
+.kb-panel-dot[data-state="failed"]{background:var(--oc-error,var(--status-error,#e5484d))}
+@keyframes kb-panel-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.kb-panel-live{white-space:nowrap}
+.kb-panel-chip{flex:none;font-size:10px;font-weight:500;color:var(--oc-warning,#e5a234);background:color-mix(in srgb,var(--oc-warning,#e5a234) 13%,transparent);padding:1px 6px;border-radius:9999px}
+.kb-panel-actions{display:flex;gap:6px;margin-top:2px}
+.kb-panel-btn{font:inherit;font-size:11px;padding:3px 9px;border-radius:6px;background:transparent;color:var(--oc-fg);border:1px solid var(--oc-border);cursor:pointer}
+.kb-panel-btn:hover{background:var(--oc-hover)}
+.kb-panel-btn-primary{background:var(--oc-primary);color:var(--oc-primary-fg,#fff);border-color:transparent}
+.kb-panel-btn-primary:hover{filter:brightness(1.08)}
+.kb-rail-foot{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.kb-rail-foot p{margin:0}
+/* Under a finger the panel rows and actions reach the app's touch sizes. */
+@media (pointer: coarse){
+  .kb-psec-head{min-height:36px}
+  .kb-panel-row{min-height:44px}
+  .kb-panel-btn{padding:8px 12px}
+}
 [hidden]{display:none!important}
 `;
 

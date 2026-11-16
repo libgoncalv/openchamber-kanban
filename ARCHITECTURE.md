@@ -40,12 +40,14 @@ openchamber-kanban/
       task.ts          # Task type, validation, createTask/applyPatch/parseTask — pure, no host
       board.ts          # column grouping, filtering, drag-and-drop rank math, Review sort — pure
       sync.ts            # agent activity → task status mapping — pure
+      panelView.ts         # rail-panel view model: display-only agent regrouping, unseen rows — pure
       worktree.ts         # worktree/branch picker logic, local service response parsing — pure
       unlink.ts            # link health: whether a linked session/worktree provably still exists — pure
       autoTask.ts          # orphan-session eligibility + initial status + title — pure
     store/
       taskStore.ts      # one host.storage key per task: task:<id>
       prefs.ts            # board filters + last-open task: host.storage key "prefs"
+      panelPrefs.ts         # rail panel fold state: host.storage key "panel-prefs"
       orphanWatermark.ts    # "going forward" cutoff timestamp: host.storage key "orphan-watermark"
     host/
       workspace.ts      # host.listProjects/onProjects/onSessions/onWorktrees/openSession wrappers
@@ -62,7 +64,7 @@ openchamber-kanban/
       board.ts               # the Kanban board
       detail.ts                # task detail dialog
     page.ts             # full-screen page entry (contributes.page)
-    panel.ts              # rail panel entry: summary + badge
+    panel.ts              # rail panel entry: condensed mini-board (five sections) + badge
     service/
       main.ts           # bootstrap: env, server, git + real recognizer (Node, not browser)
       server.ts         # the loopback HTTP surface: auth, body read, route dispatch
@@ -103,7 +105,7 @@ Stored one task per `host.storage` key (`task:<id>`), so editing one task can ne
 
 ## The board
 
-Full-screen page (`contributes.page`) with a project filter, a search field, and five columns (Backlog, To Do, In Progress, Review, Done). The rail panel is a lightweight read-only summary (open-task count + badge) — the full board can only be opened from the sidebar's Extension pages menu, never from the extension itself.
+Full-screen page (`contributes.page`) with a project filter, a search field, and five columns (Backlog, To Do, In Progress, Review, Done). The rail panel re-shows the same five views stacked vertically — see "The rail panel (mini board)" below. The full board can only be opened from the sidebar's Extension pages menu, never from the extension itself.
 
 - **Add task** is a single button. A click creates a real, persisted task immediately (title `"New task"`, appended to Backlog) and opens its detail popup for editing — no separate title field in the toolbar.
 - **Drag-and-drop** uses fractional ranks (`rankAtEnd`, `planDrop`), so moving a card only ever rewrites that card and, rarely, a few neighbors whose gap became too small — never the whole column.
@@ -113,6 +115,17 @@ Full-screen page (`contributes.page`) with a project filter, a search field, and
 ### The "needs attention" marker
 
 A task that lands in Review through something other than your own action — the live agent-status sync or auto-adopting a running session — gets `needsAttentionSince` set to that moment, shown as a warning-colored left border on its card. It's cleared the moment you open the task (its chat, or its detail popup) or drag it anywhere yourself. A status change you make deliberately (dragging, or the detail popup's own "Move to Review") never sets the marker — only the two automatic paths do.
+
+### The rail panel (mini board)
+
+The rail panel (`src/panel.ts`) stacks the board's five columns as collapsible sections with counts, using the page's own ordering rules (`byRank`, `byReviewUrgency`, reused through `src/domain/panelView.ts`) — a condensed vertical copy, not a second horizontal board. Fold state persists per section in `host.storage` key `panel-prefs` (`src/store/panelPrefs.ts`); Backlog, To Do, and Done start folded, In Progress and Review open.
+
+- **Display-only agent sync.** The panel applies the board's own pure mapping (`statusForSession`) to live session state and regroups rows accordingly, so a task the agent finished while the board was closed already sits under Review with a `→ Review` chip. It never writes a status itself: the board page stays the only writer of agent-driven status changes (its marker setting, `lastAttemptedStatus` retry guard, and save-retry logic remain in one place), and the stored status is exactly what the board will persist the next time it opens. Done is never moved, same invariant as the page.
+- **Unseen flags.** A stored `needsAttentionSince` marker, or an agent's display-only move into Review (no board was open to persist the marker), flags the row — warning border on the card, a summary line above the sections ("N tasks need your review"), and a warning-tone badge next to the open count. Rows under Done are excluded from that count: Done is deliberate work, not open attention. Review sections order unseen rows by the stored marker, with the session's own last-change time standing in for a marker that could never be persisted.
+- **Project scope.** The panel shows only the tasks of the project OpenChamber currently has open: `ready.directory` seeds it and `host.onDirectory` keeps it current, with `projectForDirectory` mapping a directory (nested paths included) to the registered project. With no open directory — or one matching no registered project — every task shows (the show-all behavior), with the project named per row. The one-line "Project: …" scope indicator under the header names the focused project, and per-row project names appear only in show-all mode.
+- **Live data.** One `onProjects` subscription plus one `onSessions` subscription per *visible* project holding linked tasks (same per-project pattern as `sessionSync.ts`, inside the frame's subscription cap) — scoping to the open project keeps the subscription set small. A `ready` snapshot rebuilds that project's entries in a single `live` map keyed by session id; `loading` keeps the last known state; an `error` drops them so rows fall back to their stored status — unknown is never displayed as new. A project leaving the visible set also has its `live` entries dropped, so an unsubscribed project's stale activity can never display as if it were live when it comes back into view. Subagent sessions are skipped. Every snapshot also schedules one debounced `loadTasks` read (500 ms), because storage has no change push and the board page may have saved edits meanwhile; a 30 s interval covers the idle case, and Refresh remains for instant checking.
+- **Tap actions.** A row opens its linked chat (`host.openSession`), clearing the stored marker first, awaited before navigation — the same discipline as the board's Open Chat path, since `openSession` can tear the frame down as part of the call. A row without a session gets a toast pointing at the full board. Unseen rows also carry **Mark done**: a deliberate user action, like the page's Mark Done — only it and marker-clearing ever write tasks from the panel.
+- **What it cannot do.** It cannot open the full board (extension pages have no open-call), has no project filter by design (the project name shows on each row), and mounts no detail popup or drag-and-drop: editing and Start Agent stay board-only, where the width exists for them.
 
 ## Agent-status sync
 
