@@ -1,5 +1,5 @@
 import type { GuestProject, HostClient } from '@openchamber/sdk';
-import { mountBadge, mountBanner, mountButton, mountSearchField, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
+import { mountBadge, mountBanner, mountButton, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
 import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
 import { ALL_PROJECTS, NO_PROJECT, rankAtEnd, type BoardFilter } from '../domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
@@ -64,13 +64,40 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   root.append(page);
 
   const toolbar = el('div', 'kb-toolbar'); page.append(toolbar);
-  const projectSelectWrap = el('div'); toolbar.append(projectSelectWrap);
-  const searchWrap = el('div', 'grow'); toolbar.append(searchWrap);
-  const refresh = mountButton(toolbar, { label: 'Refresh', variant: 'ghost', onClick: () => { void reload(); } });
+  const projectSelectWrap = el('div', 'grow'); toolbar.append(projectSelectWrap);
   const badgeSlot = el('span'); toolbar.append(badgeSlot);
   const badge = mountBadge(badgeSlot, { label: '', tone: 'neutral' });
+  // Toolbar icon buttons — the kb-iconbtn idiom drawn at toolbar scale: the
+  // reload above the board and the primary plus. `reload()` drives the
+  // reload's spin so a snapshot- or interval-triggered reload shows too.
+  const toolbarIcon = (paths: string[], label: string) => {
+    const button = el('button', 'kb-iconbtn kb-tb-iconbtn');
+    button.type = 'button';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    const node = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    node.setAttribute('viewBox', '0 0 24 24');
+    node.setAttribute('fill', 'none');
+    node.setAttribute('stroke', 'currentColor');
+    node.setAttribute('stroke-width', '2');
+    node.setAttribute('stroke-linecap', 'round');
+    node.setAttribute('stroke-linejoin', 'round');
+    node.setAttribute('aria-hidden', 'true');
+    for (const d of paths) {
+      const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      shape.setAttribute('d', d);
+      node.append(shape);
+    }
+    button.append(node);
+    return button;
+  };
+  const reloadButton = toolbarIcon(['M23 4v6h-6', 'M20.49 15a9 9 0 1 1-2.12-9.36L23 10'], 'Refresh');
+  reloadButton.addEventListener('click', () => { void reload(); });
+  toolbar.append(reloadButton);
+  const plusButton = toolbarIcon(['M12 5v14M5 12h14'], 'Add task');
+  plusButton.dataset.primary = 'true';
+  toolbar.append(plusButton);
 
-  const addRow = el('div', 'kb-row'); page.append(addRow);
   const bannerSlot = el('div'); page.append(bannerSlot);
   bannerSlot.hidden = true;
   const banner = mountBanner(bannerSlot, { tone: 'error', title: '' });
@@ -85,8 +112,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
 
   let tasks: Task[] = [];
   let projects: GuestProject[] = [];
-  let prefs: Prefs = { projectId: ALL_PROJECTS, query: '', openTaskId: null };
-  let filter: BoardFilter = { projectId: ALL_PROJECTS, query: '' };
+  let prefs: Prefs = { projectId: ALL_PROJECTS, openTaskId: null };
+  let filter: BoardFilter = { projectId: ALL_PROJECTS };
   let detail: { dispose: () => void } | null = null;
   let disposed = false;
   let currentSections: BoardSections | null = null;
@@ -107,24 +134,22 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   // No title field here on purpose: a click creates a real, persisted task right
   // away (title "New task", editable immediately in the popup that opens for it),
   // instead of asking for a title before there's anything to attach it to.
-  const add = mountButton(addRow, {
-    label: 'Add task',
-    onClick: () => {
-      void (async () => {
-        try {
-          add.update({ loading: true });
-          const task = await createBacklogTask(
-            host,
-            { tasks, title: DEFAULT_TASK_TITLE, projectId: filter.projectId === ALL_PROJECTS || filter.projectId === NO_PROJECT ? null : filter.projectId },
-          );
-          setTasks([...tasks, task]);
-          clearBanner();
-          render();
-          openDetail(task.id);
-        } catch (error) { notify(error); }
-        finally { add.update({ loading: false }); }
-      })();
-    },
+  plusButton.addEventListener('click', () => {
+    void (async () => {
+      try {
+        plusButton.dataset.busy = 'true';
+        plusButton.disabled = true;
+        const task = await createBacklogTask(
+          host,
+          { tasks, title: DEFAULT_TASK_TITLE, projectId: filter.projectId === ALL_PROJECTS || filter.projectId === NO_PROJECT ? null : filter.projectId },
+        );
+        setTasks([...tasks, task]);
+        clearBanner();
+        render();
+        openDetail(task.id);
+      } catch (error) { notify(error); }
+      finally { plusButton.disabled = false; delete plusButton.dataset.busy; }
+    })();
   });
 
   /**
@@ -315,18 +340,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   const projectSelect = mountSelect(projectSelectWrap, {
     label: 'Project', value: ALL_PROJECTS, options: projectOptions(), searchable: true,
     onChange: (value) => {
-      filter = { ...filter, projectId: value }; projectSelect.update({ value });
+      filter = { projectId: value }; projectSelect.update({ value });
       void savePrefs(host, { ...prefs, projectId: value }).catch(() => undefined);
       prefs = { ...prefs, projectId: value };
-      render();
-    },
-  });
-  const searchField = mountSearchField(searchWrap, {
-    value: filter.query, placeholder: 'Search tasks, branch, session…',
-    onChange: (value) => {
-      filter = { ...filter, query: value }; searchField.update({ value });
-      void savePrefs(host, { ...prefs, query: value }).catch(() => undefined);
-      prefs = { ...prefs, query: value };
       render();
     },
   });
@@ -689,7 +705,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   };
 
   const reload = async () => {
-    refresh.update({ loading: true });
+    reloadButton.classList.add('kb-spinning');
     try {
       const [{ tasks: loaded, failedKeys }, loadedPrefs, watermark, dismissed] = await Promise.all([
         loadTasks(host), loadPrefs(host), loadOrphanWatermark(host), loadDismissedSessions(host),
@@ -707,9 +723,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       }
       setTasks(loaded);
       prefs = loadedPrefs;
-      filter = { projectId: prefs.projectId, query: prefs.query };
+      filter = { projectId: prefs.projectId };
       projectSelect.update({ value: filter.projectId, options: projectOptions() });
-      searchField.update({ value: filter.query });
       if (failedKeys.length) showBanner('Some tasks could not be loaded', `${failedKeys.length} record(s) were skipped. Other tasks are safe; Refresh retries.`, 'warning');
       else clearBanner();
       render();
@@ -719,7 +734,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       await reconcileLinks();
       if (prefs.openTaskId && tasks.some((t) => t.id === prefs.openTaskId)) openDetail(prefs.openTaskId);
     } catch (error) { notify(error); }
-    finally { refresh.update({ loading: false }); }
+    finally { reloadButton.classList.remove('kb-spinning'); }
   };
 
   let stopProjects: (() => void) | null = null;

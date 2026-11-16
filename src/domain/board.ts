@@ -3,7 +3,7 @@ import type { Task, TaskStatus } from './task.ts';
 export const ALL_PROJECTS = '__all__';
 export const NO_PROJECT = '__none__';
 
-export type BoardFilter = { projectId: string; query: string };
+export type BoardFilter = { projectId: string };
 
 const RANK_STEP = 1024;
 const MIN_GAP = 1e-6;
@@ -13,9 +13,7 @@ export const byRank = (a: Task, b: Task) => a.rank - b.rank || a.createdAt - b.c
 export const matchesFilter = (task: Task, filter: BoardFilter) => {
   if (filter.projectId === NO_PROJECT && task.projectId !== null) return false;
   if (filter.projectId !== ALL_PROJECTS && filter.projectId !== NO_PROJECT && task.projectId !== filter.projectId) return false;
-  const query = filter.query.trim().toLowerCase();
-  if (!query) return true;
-  return `${task.title}\n${task.description}\n${task.sourceBranch ?? ''}\n${task.sessionId ?? ''}`.toLowerCase().includes(query);
+  return true;
 };
 
 /** Rank for a task appended at the end of a column (across all projects so ordering stays global). */

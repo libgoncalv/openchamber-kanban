@@ -53,7 +53,7 @@ let unseenLine: HTMLElement;
  * matches no registered project).
  */
 const visibleTasksForProject = (all: readonly Task[], currentProjectId: string | null): readonly Task[] =>
-  all.filter((task) => matchesFilter(task, { projectId: currentProjectId ?? ALL_PROJECTS, query: '' }));
+  all.filter((task) => matchesFilter(task, { projectId: currentProjectId ?? ALL_PROJECTS }));
 
 /** The one place `tasks` changes that also refreshes the live watch: only visible projects are subscribed. */
 const applyTasks = (next: Task[]) => {
@@ -200,7 +200,7 @@ const scheduleReload = () => {
 };
 
 const render = () => {
-  const sections = buildBoardView(tasks, sessionSync.live(), { projectId: currentProject?.id ?? ALL_PROJECTS, query: '' });
+  const sections = buildBoardView(tasks, sessionSync.live(), { projectId: currentProject?.id ?? ALL_PROJECTS });
   const open = countOpen(sections);
   const unseen = countUnseen(sections);
   if (currentProject) {

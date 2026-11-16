@@ -189,6 +189,13 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-iconbtn[data-info="true"]:hover{background:color-mix(in srgb,var(--oc-info,#5b9cf6) 22%,transparent)}
 .kb-iconbtn[data-primary="true"]{background:var(--oc-primary);border-color:transparent;color:var(--oc-primary-fg,#fff)}
 .kb-iconbtn[data-primary="true"]:hover{color:var(--oc-primary-fg,#fff)}
+/* Toolbar icon buttons — the same idiom at toolbar scale: the reload (Refresh)
+   spins while any reload is in flight, the plus is the board's primary action
+   and dims while a create is in flight. */
+.kb-tb-iconbtn{width:30px;height:30px;border-radius:calc(var(--oc-radius,10px) - 3px)}
+.kb-tb-iconbtn svg{width:14px;height:14px;display:block}
+.kb-tb-iconbtn.kb-spinning svg{animation:kb-spin .9s linear infinite;transform-origin:center}
+.kb-tb-iconbtn[data-busy="true"]{opacity:.55;cursor:default}
 .kb-card .kb-iconbtn[data-quiet="true"]{opacity:0;transition:opacity 120ms ease-out}
 .kb-card:hover .kb-iconbtn[data-quiet="true"],.kb-card:focus-within .kb-iconbtn[data-quiet="true"]{opacity:1}
 .kb-panel-actions{display:flex;gap:6px;align-items:center;flex:none}

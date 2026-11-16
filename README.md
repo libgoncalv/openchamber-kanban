@@ -8,7 +8,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 
 ## What it does
 
-- Click **Add task**. This creates and saves a new task right away, titled "New task", and opens it for you to edit. Later edits are saved by **Save changes** or when you click **Start Agent**.
+- Click the **+** in the toolbar. This creates and saves a new task right away, titled "New task", and opens it for you to edit. Later edits are saved by **Save changes** or when you click **Start Agent**.
 - In the task, change the title. Add a description. The description is sent as the agent's first message.
 - Choose a project.
 - Click **Start Agent**. You do not need to click **Save changes** first. It uses and saves the title, description, and project you have on screen. Pick where it runs: the project's main folder, a new branch, or a worktree you already have.

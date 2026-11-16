@@ -24,7 +24,7 @@ const task = (title: string, status: Task['status'], rank: number, extra: Partia
   ...extra,
 });
 
-const ALL: BoardFilter = { projectId: ALL_PROJECTS, query: '' };
+const ALL: BoardFilter = { projectId: ALL_PROJECTS };
 
 const state = (over: Partial<SessionLiveState> = {}): SessionLiveState =>
   ({ projectId: 'p1', activity: 'running', outcome: null, updatedAt: 5000, ...over });
@@ -126,20 +126,12 @@ test('project scope narrows like the page filter does; with no scope open everyt
   const other = task('other', 'todo', 2, { projectId: 'p2' });
   const orphan = task('orphan', 'todo', 3, { projectId: null });
   const todo = (filter: BoardFilter) => buildBoardView([mine, other, orphan], new Map(), filter).todo.map((item) => item.task.title);
-  assert.deepEqual(todo({ projectId: 'p1', query: '' }), ['mine'], 'the panel passes the project it is locked to');
-  assert.deepEqual(todo({ projectId: ALL_PROJECTS, query: '' }), ['mine', 'other', 'orphan'], 'All projects shows everything');
-  assert.deepEqual(todo({ projectId: NO_PROJECT, query: '' }), ['orphan']);
+  assert.deepEqual(todo({ projectId: 'p1' }), ['mine'], 'the panel passes the project it is locked to');
+  assert.deepEqual(todo({ projectId: ALL_PROJECTS }), ['mine', 'other', 'orphan'], 'All projects shows everything');
+  assert.deepEqual(todo({ projectId: NO_PROJECT }), ['orphan']);
   // null projectId never matches an open project id — a task attached to
   // no project at all waits when a specific project is open.
-  assert.deepEqual(todo({ projectId: 'p9', query: '' }), []);
-});
-
-test('the same search filter the page uses reaches the view model', () => {
-  const alpha = task('alpha', 'todo', 1, { description: 'ALP details' });
-  const beta = task('beta', 'todo', 2);
-  const found = (query: string) => buildBoardView([alpha, beta], new Map(), { projectId: ALL_PROJECTS, query }).todo.map((item) => item.task.title);
-  assert.deepEqual(found('ALP'), ['alpha'], 'case-insensitive across title and description');
-  assert.deepEqual(found('zzz'), []);
+  assert.deepEqual(todo({ projectId: 'p9' }), []);
 });
 
 test('countOpen excludes Done; badgeForCounts tips to warning only while unseen rows wait', () => {
