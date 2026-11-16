@@ -2,7 +2,7 @@ import type { GuestProject, HostClient } from '@openchamber/sdk';
 import { mountBadge, mountBanner, mountButton, mountSearchField, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
 import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
 import { ALL_PROJECTS, NO_PROJECT, rankAtEnd, type BoardFilter } from '../domain/board.ts';
-import { badgeForCounts, buildBoardView, countOpen, countUnseen, type BoardSections } from '../domain/boardView.ts';
+import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
 import { createBacklogTask, deleteTaskWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
 import { deleteTask, loadTasks, saveTask } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
@@ -97,6 +97,10 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     onDelete: (task) => { void deleteTaskForTask(task); },
     onDrop: (id, status, beforeId) => { void dropTask(id, status, beforeId); },
     onMoveStatus: (task, status) => { void moveTaskByMenu(task, status); },
+    // The ✓ in the looks-done affordance is the user's own click and so a
+    // deliberate Done — exactly the ⋯ menu's Move-to Done path: kept rank,
+    // attention marker cleared, persisted with the shared rollback.
+    onLooksDone: (task) => { void moveTaskByMenu(task, 'done'); },
     projectName: (task) => (task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? task.projectId : null),
   });
 
@@ -401,11 +405,35 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     badge.update({ label: counts.label, tone: counts.tone });
   };
 
+  /**
+   * The board's one time-driven re-render: a quiet window crossing (the ✓
+   * appears) or a tooltip minute while it still counts — the earliest such
+   * instant across the tasks on the board. Everything else re-renders
+   * through snapshots and saves; nothing here ever writes.
+   */
+  let looksDoneTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearLooksDoneTick = () => {
+    if (looksDoneTimer !== null) { clearTimeout(looksDoneTimer); looksDoneTimer = null; }
+  };
+  const scheduleLooksDoneTick = () => {
+    clearLooksDoneTick();
+    if (disposed) return;
+    const now = Date.now();
+    let next: number | null = null;
+    for (const task of tasks) {
+      const at = nextLooksDoneTickAt(task, liveStateFor(task, sessionSync.live()), now);
+      if (at !== null && (next === null || at < next)) next = at;
+    }
+    if (next === null) return;
+    looksDoneTimer = setTimeout(() => { looksDoneTimer = null; if (!disposed) render(); }, Math.max(0, next - Date.now()));
+  };
+
   const render = () => {
     const sections = buildBoardView(tasks, sessionSync.live(), filter);
     currentSections = sections;
     updateBadge(sections);
     board.render(sections);
+    scheduleLooksDoneTick();
   };
 
   const openDetail = (id: string) => {
@@ -710,6 +738,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   return {
     dispose: () => {
       disposed = true;
+      clearLooksDoneTick();
       stopProjects?.();
       sessionSync.dispose();
       worktreeSync.dispose();

@@ -118,7 +118,31 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
   .kb-psec-head{min-height:36px}
   .kb-panel-row{min-height:44px}
   .kb-panel-menu{opacity:1}
+  /* Touch has no hover: a muted ✓ is a button always, not only on reveal. */
+  .kb-card .kb-iconbtn[data-quiet="true"]{opacity:1}
 }
+/* Small square icon buttons — the ✓ beside the ⋯ menu on page cards and the
+   rail attention actions — reusing the dictation panel's icon-button idiom.
+   A hint ✓ (data-hint) is success-tinted and always visible: it IS the
+   suggestion. A quiet ✓ (data-quiet) is muted and revealed on hover/focus,
+   the same reveal rule as the ⋯ menu, sinking under it as the smaller
+   affordance. */
+.kb-iconbtn{width:22px;height:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--oc-muted);border:1px solid var(--oc-border);border-radius:calc(var(--oc-radius,10px) - 4px);cursor:pointer;flex:none}
+.kb-iconbtn svg{width:12px;height:12px;display:block}
+.kb-iconbtn:hover{color:var(--oc-fg);background:var(--oc-hover)}
+.kb-iconbtn:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+.kb-iconbtn[data-hint="true"]{color:var(--oc-success,var(--status-success,#46a758));border-color:color-mix(in srgb,var(--oc-success,var(--status-success,#46a758)) 38%,transparent)}
+.kb-iconbtn[data-hint="true"]:hover{color:var(--oc-success,var(--status-success,#46a758));background:color-mix(in srgb,var(--oc-success,var(--status-success,#46a758)) 12%,transparent)}
+.kb-iconbtn[data-primary="true"]{background:var(--oc-primary);border-color:transparent;color:var(--oc-primary-fg,#fff)}
+.kb-iconbtn[data-primary="true"]:hover{color:var(--oc-primary-fg,#fff)}
+.kb-card .kb-iconbtn[data-quiet="true"]{opacity:0;transition:opacity 120ms ease-out}
+.kb-card:hover .kb-iconbtn[data-quiet="true"],.kb-card:focus-within .kb-iconbtn[data-quiet="true"]{opacity:1}
+.kb-panel-actions{display:flex;gap:6px;align-items:center;flex:none}
+/* Rail rows carry the same buttons at the 26px touch size. */
+.kb-panel-row .kb-iconbtn{width:26px;height:26px}
+.kb-panel-row .kb-iconbtn svg{width:13px;height:13px}
+/* The rail's looks-done chip speaks success, unlike the warning → Review chip. */
+.kb-panel-chip[data-ok]{color:var(--oc-success,var(--status-success,#46a758));background:color-mix(in srgb,var(--oc-success,var(--status-success,#46a758)) 13%,transparent)}
 [hidden]{display:none!important}
 `;
 

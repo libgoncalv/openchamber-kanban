@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTask, type Task } from '../src/domain/task.ts';
 import { ALL_PROJECTS, NO_PROJECT, type BoardFilter } from '../src/domain/board.ts';
+import { DEFAULT_SYNC_OPTIONS } from '../src/domain/sync.ts';
 import {
   buildBoardView,
   countOpen,
@@ -10,6 +11,10 @@ import {
   describeActivity,
   effectiveStatus,
   liveStateFor,
+  looksDoneFor,
+  looksDoneTooltip,
+  nextLooksDoneTickAt,
+  LOOKS_DONE_QUIET_MS,
   type BoardItem,
   type SessionLiveState,
 } from '../src/domain/boardView.ts';
@@ -156,4 +161,69 @@ test('describeActivity maps every observable state to a row line and tone', () =
   assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: 'failed' })), { text: 'failed', tone: 'failed' });
   assert.deepEqual(describeActivity(state({ activity: 'idle', outcome: null })), { text: 'idle', tone: 'idle' });
   assert.equal(describeActivity(state({ activity: 'unknown' })), null);
+});
+
+// ---- The "looks done" affordance (Route A: a suggestion, never a write) ----
+
+/** A task in Review whose linked session finished at `finishedAt`. */
+const finishedReview = (extra: Partial<Task> = {}, status: Task['status'] = 'review'): Task =>
+  task('looksdone', status, 1, { sessionId: 'sd', projectId: 'p1', ...extra });
+const finished = (finishedAt: number): Map<string, SessionLiveState> =>
+  new Map([['sd', state({ activity: 'idle', outcome: 'completed', updatedAt: finishedAt })]]);
+/** Just past the quiet window. */
+const QUIET_AT = (finishedAt: number) => finishedAt + LOOKS_DONE_QUIET_MS + 60_000;
+
+test('a finished, quiet session suggests Done: tinted while unseen, muted once seen, nothing before the window', () => {
+  const at = 100_000;
+  const unseen = finishedReview({ needsAttentionSince: at });
+  const seen = finishedReview();
+  // Unseen (marker set) reads the clock from the marker; seen reads it from the session's own last change.
+  assert.equal(looksDoneFor(unseen, finished(at).get('sd')!, QUIET_AT(at)), 'hint');
+  assert.equal(looksDoneFor(seen, finished(at).get('sd')!, QUIET_AT(at)), 'quiet');
+  // Still inside the quiet window: nothing shows yet — the finish itself is
+  // already flagged as attention; the ✓ only earns its place through silence.
+  assert.equal(looksDoneFor(unseen, finished(at).get('sd')!, at + 5 * 60_000), null);
+  assert.equal(looksDoneFor(seen, finished(at).get('sd')!, at + 5 * 60_000), null);
+});
+
+test('looks-done requires the finish, the stored Review status, and a live state', () => {
+  const at = 100_000;
+  const s = finished(at).get('sd')!;
+  assert.equal(looksDoneFor(finishedReview({}, 'in_progress'), s, QUIET_AT(at)), null, 'a row the display regroups is not enough — status converges from the page');
+  assert.equal(looksDoneFor(finishedReview(), state({ activity: 'running' }), QUIET_AT(at)), null);
+  assert.equal(looksDoneFor(finishedReview(), state({ activity: 'waiting-question' }), QUIET_AT(at)), null);
+  assert.equal(looksDoneFor(finishedReview(), state({ activity: 'idle', outcome: null }), QUIET_AT(at)), null);
+  assert.equal(looksDoneFor(finishedReview(), null, QUIET_AT(at)), null, 'no trusted snapshot, no ✓ — unknown is never new');
+  assert.equal(looksDoneFor(finishedReview({}, 'done'), s, QUIET_AT(at)), null, 'Done is deliberate work; the suggestion never reaches it');
+});
+
+test('the view model carries the state and its tooltip; the ✓ rides the Review section under stored status', () => {
+  const at = 100_000;
+  const t = finishedReview({ needsAttentionSince: at });
+  const sections = buildBoardView([t], finished(at), ALL, DEFAULT_SYNC_OPTIONS, QUIET_AT(at));
+  const item = sections.review[0]!;
+  assert.equal(item.looksDone, 'hint');
+  assert.equal(item.looksDoneNote, 'Looks done · quiet 11m — click to mark Done');
+  // A long-settled task drops the count: "quiet 4320m" would mean nothing.
+  const settled = buildBoardView([t], finished(at), ALL, DEFAULT_SYNC_OPTIONS, at + 3 * 60 * 60_000);
+  assert.equal(settled.review[0]?.looksDoneNote, 'Looks done — click to mark Done');
+  // Before the window nothing shows, not even a note.
+  const early = buildBoardView([t], finished(at), ALL, DEFAULT_SYNC_OPTIONS, at + 2 * 60_000);
+  assert.equal(early.review[0]?.looksDone, null);
+  assert.equal(early.review[0]?.looksDoneNote, null);
+});
+
+test('nextLooksDoneTickAt schedules the window crossing and the tooltip minutes, nothing else', () => {
+  const at = 100_000;
+  const t = finishedReview({ needsAttentionSince: at });
+  const s = finished(at).get('sd')!;
+  // Before the window: the next change is exactly the crossing, one instant.
+  assert.equal(nextLooksDoneTickAt(t, s, at + 4 * 60_000), at + LOOKS_DONE_QUIET_MS);
+  // While the tooltip counts: the next minute boundary.
+  assert.equal(nextLooksDoneTickAt(t, s, at + LOOKS_DONE_QUIET_MS + 90_000), at + 12 * 60_000);
+  // After the tooltip stops counting: no time-based change is left.
+  assert.equal(nextLooksDoneTickAt(t, s, at + 61 * 60_000), null);
+  // Nothing eligible: no tick at all — the snapshot drives those renders.
+  assert.equal(nextLooksDoneTickAt(finishedReview(), state({ activity: 'running' }), at + 4 * 60_000), null);
+  assert.equal(nextLooksDoneTickAt(t, null, at + 4 * 60_000), null);
 });

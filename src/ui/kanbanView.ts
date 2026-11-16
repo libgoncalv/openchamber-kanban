@@ -10,10 +10,10 @@ import { el } from './dom.ts';
  * `page` mode: five columns side by side, cards, a tap opens the task's
  * detail view. The rail panel mounts it in `rail` mode: the same five views
  * stacked as sections, slim rows. Every interactive affordance — the primary
- * tap, the ⋯ menu, dragging, folding, quick actions — renders only when the
- * surface supplies the matching handler, so a surface that passes none (the
- * rail: a pure display mirror) renders the identical layout with nothing to
- * click.
+ * tap, the ✓ mark-done shortcut, the ⋯ menu, dragging, folding, quick
+ * actions — renders only when the surface supplies the matching handler, so
+ * a surface that passes none (the rail: a pure display mirror) renders the
+ * identical layout with nothing to click.
  * Everything the two surfaces must never disagree on lives here: the item
  * body (title, project line, live agent line, → chip), the ⋯ menu
  * structure, the drop math, keyboard activation, and the attention flag.
@@ -39,6 +39,13 @@ export type KanbanHandlers = {
   onOpenChat?: (task: Task) => void;
   /** Rail attention rows: a deliberate Done — the only way a row tap ever sets it. */
   onMarkDone?: (task: Task) => void;
+  /**
+   * Page cards only: the ✓ inside the "looks done" affordance — a deliberate
+   * Done through the same kept-rank path as the ⋯ menu. The rail passes none
+   * and shows the state as a display-only chip instead; the rail surface
+   * performs no writes.
+   */
+  onLooksDone?: (task: Task) => void;
   /** The project's display name to show on a row, or null to show none (the rail in scoped mode). */
   projectName: (task: Task) => string | null;
   /** Only when a surface folds its sections: whether one starts folded, and toggling it. */
@@ -49,6 +56,44 @@ export type KanbanHandlers = {
 export type KanbanView = {
   render: (sections: BoardSections) => void;
   dispose: () => void;
+};
+
+/**
+ * The icon set for the small square buttons (the same 24-viewBox style the
+ * dictation panel uses — `.kb-dict-iconbtn`'s idiom, reused by `.kb-iconbtn`):
+ * a check for "mark done" and a speech bubble for "open chat".
+ */
+const CHECK_DONE_PATH = 'M10 15.172l9.192-9.193 1.415 1.414L10 18l-6.364-6.364 1.414-1.414z';
+const CHAT_PATH =
+  'M20 2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4l4 4 3-4h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z';
+const svgGlyph = (path: string): SVGElement => {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  node.setAttribute('viewBox', '0 0 24 24');
+  node.setAttribute('fill', 'currentColor');
+  node.setAttribute('aria-hidden', 'true');
+  const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  shape.setAttribute('d', path);
+  node.append(shape);
+  return node;
+};
+
+/** A small square icon button `.kb-iconbtn` with its own tooltip/label; taps do not count as item activation. */
+const iconButton = (
+  path: string,
+  label: string,
+  onTap: () => void,
+  attrs: { primary?: boolean; hint?: boolean; quiet?: boolean } = {},
+): HTMLButtonElement => {
+  const button = el('button', 'kb-iconbtn');
+  button.type = 'button';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  if (attrs.primary) button.dataset.primary = 'true';
+  if (attrs.hint) button.dataset.hint = 'true';
+  if (attrs.quiet) button.dataset.quiet = 'true';
+  button.append(svgGlyph(path));
+  button.addEventListener('click', (event) => { event.stopPropagation(); onTap(); });
+  return button;
 };
 
 /** Move-and-edit affordance for one item — only the parts the surface handles, `null` when it handles none. */
@@ -159,29 +204,48 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     }
     main.append(sub);
 
-    // Attention actions are a rail affordance: the width is gone on a page
-    // whose card click opens the full detail view with the same actions.
+    // Attention actions are a small-icon affordance: Open chat (primary) and
+    // Mark done — deliberate taps, the only ones a row offers besides itself.
     if (rail && item.attention) {
       const actions = el('div', 'kb-panel-actions');
       if (task.sessionId && handlers.onOpenChat) {
-        const chat = el('button', 'kb-panel-btn kb-panel-btn-primary', 'Open chat');
-        chat.type = 'button';
-        chat.addEventListener('click', (event) => { event.stopPropagation(); handlers.onOpenChat!(task); });
-        actions.append(chat);
+        const onOpenChat = handlers.onOpenChat;
+        actions.append(iconButton(CHAT_PATH, 'Open chat', () => onOpenChat(task), { primary: true }));
       }
       if (item.displayStatus !== 'done' && handlers.onMarkDone) {
         const onMarkDone = handlers.onMarkDone;
-        const done = el('button', 'kb-panel-btn', 'Mark done');
-        done.type = 'button';
-        done.addEventListener('click', (event) => { event.stopPropagation(); onMarkDone(task); });
-        actions.append(done);
+        actions.append(iconButton(CHECK_DONE_PATH, 'Mark done', () => onMarkDone(task)));
       }
       if (actions.childElementCount > 0) main.append(actions);
     }
 
-    if (item.movedByAgent) item_.append(el('span', 'kb-panel-chip', `→ ${STATUS_LABELS[item.displayStatus]}`));
+    // The rail's display-only chip. The looks-done state outranks the agent-move
+    // chip: once a finished session has been quiet this long, the move it made
+    // (already persisted or about to be) says less than the quiet does.
+    // The page card shows the state as the ✓ button instead — this chip is rail-only.
+    if (rail && item.looksDone) {
+      const chip = el('span', 'kb-panel-chip', '✓ looks done');
+      chip.dataset.ok = 'true';
+      item_.append(chip);
+    } else if (item.movedByAgent) {
+      item_.append(el('span', 'kb-panel-chip', `→ ${STATUS_LABELS[item.displayStatus]}`));
+    }
 
     const menuItems = itemMenuItems(item, handlers);
+    // The "looks done" ✓ beside the ⋯ menu — page cards only. 'hint' (unseen)
+    // is success-tinted and always visible: it IS the suggestion. 'quiet'
+    // (seen) goes muted and reveals on hover/focus, the same reveal rule the
+    // ⋯ menu follows below. The click is the user's own Done click; the
+    // agent never gets here.
+    if (!rail && item.looksDone && handlers.onLooksDone) {
+      const onLooksDone = handlers.onLooksDone;
+      top.append(iconButton(
+        CHECK_DONE_PATH,
+        item.looksDoneNote ?? 'Looks done — click to mark Done',
+        () => onLooksDone(task),
+        item.looksDone === 'hint' ? { hint: true } : { quiet: true },
+      ));
+    }
     if (menuItems) {
       const menuSlot = el('span', 'kb-panel-menu');
       top.append(menuSlot);

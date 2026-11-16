@@ -52,6 +52,12 @@ A task that moved to Review, and you have not opened yet, gets an **orange borde
 
 Open the task (click it, or click Edit), and the border goes away.
 
+### "Looks done" — a suggestion, never a decision
+
+When a task sits in Review, its agent has finished, and nothing has happened for about ten minutes — no new turn, no answer requested — a small green **✓** appears next to the ⋯ menu on the card. Its tooltip explains itself: "Looks done · quiet 14m — click to mark Done."
+
+The ✓ is only a suggestion, in the spirit of how OpenChamber itself treats finished sessions: the board never marks a task Done on its own. A click on the ✓ is simply a faster way for you to mark it Done (it stays where it is in the column order). If a new agent turn starts, the ✓ disappears immediately, because the quiet is over. Once you have opened the task, the ✓ turns quiet too: it only appears when you hover the card. On the narrow panel the same moment shows as a small "✓ looks done" tag on the row.
+
 ### Tasks can also appear by themselves
 
 If you start a chat in OpenChamber another way — for example, from the sidebar — this board can still find it and make a task for it. The board adopts new, active sessions while it is open, and checks again when you open it. This only works for sessions created **after** you first open the board. It does not look back at older sessions. Sessions started with **Start Agent** are linked to the task you started from, not adopted as another task.
