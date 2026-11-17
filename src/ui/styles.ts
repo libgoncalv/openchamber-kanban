@@ -72,11 +72,22 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-muted{color:var(--oc-muted);font-size:12px}
 .kb-mono{font:12px var(--oc-mono);color:var(--oc-muted)}
 .kb-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:48px 16px;color:var(--oc-muted);text-align:center}
-.kb-radio-group{display:flex;flex-direction:column;gap:10px}
-.kb-radio-option{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
-.kb-radio-option input{margin-top:3px;accent-color:var(--oc-primary)}
-.kb-radio-title{font-weight:550;font-size:13px}
-.kb-radio-desc{font-size:12px;color:var(--oc-muted);margin-top:2px}
+/* Corner close (the ✕ that replaced the footer's Close button): the small
+   square icon-button idiom the board's cards use, one size up for the head. */
+.kb-dialog-close{width:24px;height:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--oc-muted);border:1px solid var(--oc-border);border-radius:calc(var(--oc-radius,10px) - 4px);cursor:pointer;flex:none}
+.kb-dialog-close svg{width:13px;height:13px;display:block}
+.kb-dialog-close:hover{color:var(--oc-fg);background:var(--oc-hover)}
+.kb-dialog-close:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+/* The task-body Delete button, always red (the kit's destructive) like the
+   board's own danger buttons; the first, arming press fills it until the
+   confirming press — the same escalation the selection bar's Delete gets. */
+.kb-danger-btn[data-armed="true"] .oc-sdk-btn[data-variant="destructive"]{background:var(--oc-error,var(--status-error,#e5484d));border-color:transparent;color:var(--oc-primary-fg,#fff)}
+.kb-danger-btn[data-armed="true"] .oc-sdk-btn[data-variant="destructive"]:hover{background:var(--oc-error,var(--status-error,#e5484d));color:var(--oc-primary-fg,#fff)}
+/* The Start Agent block at the top of the session section: note, button,
+   gating hint — no rule above it; the task-body actions row is just the
+   existing 'kb-row between'. */
+.kb-start{display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+.kb-start p{margin:0}
 /* The status strip in the task dialog: one pressed button per status; a press
    moves immediately (the deliberate-move path), the pressed one is inert. */
 .kb-status-seg{display:flex;align-items:stretch;gap:4px;flex-wrap:wrap}
@@ -224,9 +235,8 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-iconbtn[data-armed="true"]:hover{background:color-mix(in srgb,var(--oc-error,#e5484d) 20%,transparent)}
 .kb-card .kb-iconbtn[data-quiet="true"]{opacity:0;transition:opacity 120ms ease-out}
 .kb-card:hover .kb-iconbtn[data-quiet="true"],.kb-card:focus-within .kb-iconbtn[data-quiet="true"]{opacity:1}
-.kb-panel-actions{display:flex;gap:6px;align-items:center;flex:none}
-/* Rail rows carry the same buttons at the 26px touch size; the ✓ (data-info)
-   rides them at every non-done row's right edge and never hides. */
+/* Rail rows carry the same buttons at the 26px touch size; the chat button
+   and the ✓ (data-info) ride them at a row's right edge and never hide. */
 .kb-panel-row .kb-iconbtn{width:26px;height:26px}
 .kb-panel-row .kb-iconbtn svg{width:13px;height:13px}
 /* The rail's looks-done chip speaks success — the only chip a row wears. */

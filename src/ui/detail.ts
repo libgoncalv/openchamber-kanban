@@ -1,23 +1,12 @@
-import type { GuestSessionWorktree } from '@openchamber/sdk';
-import { mountBanner, mountButton, mountList, mountSelect, mountTextField, type SelectOption } from '@openchamber/sdk/ui';
+import { mountBanner, mountButton, mountList, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import { appendDictatedDescription, DESCRIPTION_MAX, STATUSES, STATUS_LABELS, TITLE_MAX, type Task, type TaskPatch } from '../domain/task.ts';
 import { describeActivity, type SessionLiveState } from '../domain/boardView.ts';
 import type { DictationController } from '../host/dictation.ts';
 import { mountDictationPanel, type DictationPanel } from './dictationPanel.ts';
 import { agentPill } from './pill.ts';
-import {
-  branchNameConflictsWithBase,
-  buildSessionWorktree,
-  DEFAULT_BASE_BRANCH_OPTION,
-  DESTINATION_NEW,
-  DESTINATION_ROOT,
-  resolveBaseBranch,
-} from '../domain/worktree.ts';
 import { el } from './dom.ts';
 
 export type SessionOption = { id: string; title: string; activity: string };
-export type WorktreeOption = { id: string; label: string; hint?: string; disabled?: boolean };
-export type WorktreeInfo = { destinations: WorktreeOption[]; baseBranches: SelectOption[]; hasKnownBranches: boolean };
 
 export type TaskDetailProps = {
   task: Task;
@@ -29,13 +18,13 @@ export type TaskDetailProps = {
   onLinkSession: (sessionId: string, projectId: string | null) => Promise<void>;
   onUnlinkSession: () => Promise<void>;
   /**
-   * Starts a real session for this task. Absent/null in the rail panel: the
-   * worktree pickers stay board-only, where the width for them exists. The
-   * "Or link an existing session" picker still renders without Start Agent.
+   * Starts a real OpenCode session for this task — always directly in the
+   * project root; the dialog no longer picks a worktree, the implementation
+   * owns the destination. Absent: the session section keeps only the
+   * "Or link an existing session" picker.
    */
-  onStartAgent?: ((input: { projectId: string; worktree: GuestSessionWorktree; title: string; description: string }) => Promise<void>) | null;
+  onStartAgent?: ((input: { projectId: string; title: string; description: string }) => Promise<void>) | null;
   loadSessionsForProject: (projectId: string) => Promise<SessionOption[]>;
-  loadWorktreeInfo: (projectId: string) => Promise<WorktreeInfo>;
   /** Local voice dictation for the description; null/absent hides the mic button. */
   dictation?: DictationController | null;
   /** Non-blocking notices (dictation results, toasts): fires host.toast. */
@@ -46,7 +35,21 @@ export type TaskDetailProps = {
   compact?: boolean;
 };
 
-const defaultBaseBranchOptions: SelectOption[] = [{ id: DEFAULT_BASE_BRANCH_OPTION, label: 'Use project default' }];
+/** Remixicon close glyph, the app's icon set — a duplicate of the SDK kit's
+ *  unexported one, the same way dictationPanel.ts duplicates the mic. */
+const CLOSE_PATH =
+  'M12 10.586l4.95-4.95 1.414 1.414-4.95 4.95 4.95 4.95-1.414 1.414-4.95-4.95-4.95 4.95-1.414-1.414 4.95-4.95-4.95-4.95L7.05 5.636z';
+
+const svgIcon = (path: string): SVGElement => {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  node.setAttribute('viewBox', '0 0 24 24');
+  node.setAttribute('fill', 'currentColor');
+  node.setAttribute('aria-hidden', 'true');
+  const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  shape.setAttribute('d', path);
+  node.append(shape);
+  return node;
+};
 
 /** Micro tone language for the "Or link an existing session" list badges — the
  *  same family the agent pills use, expressed in the kit's badge tones. */
@@ -144,6 +147,16 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
     const headLine = describeActivity(headLive);
     if (headLine) head.append(agentPill(headLine));
   }
+  // The ✕ replaced the footer's Close button: a dialog closes from its
+  // corner. Same semantics — a plain close; unsaved edits are not saved,
+  // exactly what the old Close button did.
+  const closeButton = el('button', 'kb-dialog-close');
+  closeButton.type = 'button';
+  closeButton.title = 'Close';
+  closeButton.setAttribute('aria-label', 'Close');
+  closeButton.append(svgIcon(CLOSE_PATH));
+  closeButton.addEventListener('click', () => props.onClose());
+  head.append(closeButton);
   dialog.append(head);
   // Shown at both the top and the bottom of this (often tall, scrollable) dialog.
   // One error from one action taken anywhere in it — Save, Start Agent, link
@@ -168,10 +181,25 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
 
   const grid = el('div', 'kb-dialog-grid');
   dialog.append(grid);
-  const titleWrap = el('div', 'kb-span2'); grid.append(titleWrap);
+  // Title and Project share the grid's first row — the two things that name
+  // and place the task at a glance; the Description owns the width under it,
+  // so its lines stay long where the reading happens.
+  const titleWrap = el('div'); grid.append(titleWrap);
   const titleField = mountTextField(titleWrap, {
     label: 'Title', value: title,
     onChange: (value) => { title = value; markDirty(); titleField.update({ value }); headTitle.textContent = value || 'New task'; updateStartAgentAvailability(); },
+  });
+  const projectWrap = el('div'); grid.append(projectWrap);
+  const projectField = mountSelect(projectWrap, {
+    label: 'Project', value: projectId || null, placeholder: 'No project',
+    options: [{ id: '', label: 'No project' }, ...props.projects.map((p) => ({ id: p.id, label: p.name }))],
+    searchable: props.projects.length > 6,
+    onChange: (value) => {
+      projectId = value; markDirty(); projectField.update({ value });
+      renderHeadSub();
+      refreshSessionPicker();
+      updateStartAgentAvailability();
+    },
   });
   const descWrap = el('div', 'kb-span2'); grid.append(descWrap);
   const descField = mountTextField(descWrap, {
@@ -211,14 +239,49 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
       onNotice: (body, kind) => onToast(body, kind),
     }).dispose;
   }
-  // --- The board section: status + project. The status strip replaces the two
-  // --- controls this dialog used to carry — a select that waited for Save plus
+
+  // The task-body actions — Delete and Save — sit hard against what they
+  // write: the fields end and the buttons follow, before the status strip
+  // and the session section below. Closing left for the header's ✕; mounting
+  // happens here, not at the dialog's end, so the DOM order is fixed exactly
+  // as the dialog reads.
+  const actionsRow = el('div', 'kb-row between'); dialog.append(actionsRow);
+  let confirmingDelete = false;
+  // Delete wears red from the start — the kit's destructive variant, the same
+  // look the board's own danger buttons use. The two-press confirm keeps its
+  // visual escalation: the first press fills the button red (the bar's armed
+  // look) and says "Click again to delete"; the second does it.
+  const deleteSlot = el('span', 'kb-danger-btn'); actionsRow.append(deleteSlot);
+  const deleteBtn = mountButton(deleteSlot, {
+    label: 'Delete task', variant: 'destructive',
+    onClick: () => {
+      if (!confirmingDelete) { confirmingDelete = true; deleteSlot.dataset.armed = 'true'; deleteBtn.update({ label: 'Click again to delete' }); return; }
+      void props.onDelete().catch(showError);
+    },
+  });
+  const save = mountButton(actionsRow, {
+    label: 'Save changes', disabled: !dirty, variant: 'secondary',
+    onClick: () => {
+      void (async () => {
+        busy = true; save.update({ loading: true });
+        try {
+          await props.onSave({ title, description, status, projectId: projectId || null });
+          dirty = false; save.update({ disabled: true });
+        } catch (error) { showError(error); }
+        finally { busy = false; save.update({ loading: false }); }
+      })();
+    },
+  });
+
+  // --- The board section: only the status strip now — the project select
+  // --- moved up beside the Title field. The strip replaces the two controls
+  // --- this dialog used to carry — a select that waited for Save plus
   // --- a row of "Move to" buttons — with one control that moves on click, the
   // --- same deliberate move the ⋯ menu and a drag make (it clears the
   // --- attention marker and keeps the card's rank; `quickStatus` owns that).
   const boardSection = el('div', 'kb-section'); dialog.append(boardSection);
-  boardSection.append(el('div', 'kb-section-title', 'Board'));
-  boardSection.append(el('p', 'kb-muted', 'Status — a click moves immediately, the same deliberate move a drag or the ⋯ menu makes.'));
+  boardSection.append(el('div', 'kb-section-title', 'Status'));
+  boardSection.append(el('p', 'kb-muted', 'A click moves immediately — the same deliberate move a drag or the ⋯ menu makes.'));
   const statusSeg = el('div', 'kb-status-seg');
   statusSeg.setAttribute('role', 'group');
   statusSeg.setAttribute('aria-label', 'Move to status');
@@ -237,50 +300,6 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
       statusSeg.append(segButton);
     }
   };
-
-  const projectWrap = el('div'); boardSection.append(projectWrap);
-  const projectField = mountSelect(projectWrap, {
-    label: 'Project', value: projectId || null, placeholder: 'No project',
-    options: [{ id: '', label: 'No project' }, ...props.projects.map((p) => ({ id: p.id, label: p.name }))],
-    searchable: props.projects.length > 6,
-    onChange: (value) => {
-      projectId = value; markDirty(); projectField.update({ value });
-      renderHeadSub();
-      refreshSessionPicker();
-      refreshWorktreeOptions();
-      updateStartAgentAvailability();
-    },
-  });
-
-  // The footer is created before the section that fills its Start Agent slot
-  // (that section only exists when a start flow does), but appended last, so
-  // the DOM order stays: session section, error slot, footer.
-  const footer = el('div', 'kb-row between');
-  const dangerRow = el('div', 'kb-row'); footer.append(dangerRow);
-  const footerActions = el('div', 'kb-row'); footer.append(footerActions);
-  let confirmingDelete = false;
-  const deleteBtn = mountButton(dangerRow, {
-    label: 'Delete task', variant: 'ghost',
-    onClick: () => {
-      if (!confirmingDelete) { confirmingDelete = true; deleteBtn.update({ label: 'Click again to delete', variant: 'destructive' }); return; }
-      void props.onDelete().catch(showError);
-    },
-  });
-  mountButton(footerActions, { label: 'Close', variant: 'outline', onClick: () => props.onClose() });
-  const save = mountButton(footerActions, {
-    label: 'Save changes', disabled: !dirty, variant: 'secondary',
-    onClick: () => {
-      void (async () => {
-        busy = true; save.update({ loading: true });
-        try {
-          await props.onSave({ title, description, status, projectId: projectId || null });
-          dirty = false; save.update({ disabled: true });
-        } catch (error) { showError(error); }
-        finally { busy = false; save.update({ loading: false }); }
-      })();
-    },
-  });
-  const startAgentSlot = el('span'); footerActions.append(startAgentSlot);
 
   const quickStatus = async (next: Task['status']) => {
     if (busy || next === status) return;
@@ -342,162 +361,49 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   renderSessionBody();
 
   // --- Start Agent: shown only before a session is linked, and only where
-  // --- the host surface carries it (the board page; the panel does not).
-  const startRoot = el('div');
+  // --- the host surface carries it. Always starts from the project root —
+  // --- the SDK calls that `false`: no worktree, so nothing to pick here.
+  const startRoot = el('div', 'kb-start');
   const pickerRoot = el('div');
   const hasStartAgent = !hasSession && props.onStartAgent != null;
   if (hasStartAgent) sessionSection.append(startRoot);
   sessionSection.append(pickerRoot);
   pickerRoot.hidden = hasSession;
 
-  type StartFromMode = typeof DESTINATION_ROOT | typeof DESTINATION_NEW | 'existing';
-  let startFromMode: StartFromMode = DESTINATION_ROOT;
-  let existingWorktreeId = '';
-  let branchName = '';
-  let baseBranchSelection = DEFAULT_BASE_BRANCH_OPTION;
-  let startBusy = false;
-  let worktreeGeneration = 0;
-  let refreshWorktreeOptions = () => {};
-
   if (hasStartAgent) {
-    startRoot.append(el('p', 'kb-muted', 'Starts a real OpenCode session with the description above as its first message, and links it to this task.'));
-    const startGrid = el('div', 'kb-dialog-grid'); startRoot.append(startGrid);
-
-    // "Start from" — a radio choice, not a dropdown, same layout as OpenChamber's
-    // own New Worktree dialog. "MR or issue" from that dialog has no equivalent
-    // here (needs a connected GitLab/Linear account, unrelated to this board).
-    const startFromWrap = el('div'); startGrid.append(startFromWrap);
-    startFromWrap.append(el('div', 'kb-section-title', 'Start from'));
-    const radioGroup = el('div', 'kb-radio-group'); startFromWrap.append(radioGroup);
-    const radioName = `kb-start-from-${props.task.id}`;
-    const startFromOptions: Array<{ id: StartFromMode; title: string; desc: string }> = [
-      { id: DESTINATION_ROOT, title: 'Project root', desc: 'Run directly in the main checkout, no worktree.' },
-      { id: DESTINATION_NEW, title: 'New branch', desc: 'A fresh branch and worktree, based on the branch you pick.' },
-      { id: 'existing', title: 'Existing worktree', desc: 'Reuse a worktree you already have checked out.' },
-    ];
-    for (const option of startFromOptions) {
-      const optionLabel = el('label', 'kb-radio-option');
-      const input = document.createElement('input');
-      input.type = 'radio'; input.name = radioName; input.value = option.id; input.checked = option.id === startFromMode;
-      const textWrap = el('div');
-      textWrap.append(el('div', 'kb-radio-title', option.title), el('div', 'kb-radio-desc', option.desc));
-      optionLabel.append(input, textWrap);
-      radioGroup.append(optionLabel);
-      input.addEventListener('change', () => {
-        if (!input.checked) return;
-        startFromMode = option.id;
-        newBranchFields.hidden = startFromMode !== DESTINATION_NEW;
-        existingWorktreeFields.hidden = startFromMode !== 'existing';
-        updateStartAgentAvailability();
-      });
-    }
-
-    const fieldsWrap = el('div'); startGrid.append(fieldsWrap);
-
-    // New branch: name + base branch. The old read-only "Folder name" field is
-    // helper text now — the SDK's startSession has one `name` for both, with no
-    // way to set a separate folder name independently, and a field that can't
-    // be edited says that worse as a line under the field it mirrors.
-    const newBranchFields = el('div', 'kb-dialog-grid'); fieldsWrap.append(newBranchFields);
-    newBranchFields.hidden = true;
-    const branchWrap = el('div'); newBranchFields.append(branchWrap);
-    const branchNameField = mountTextField(branchWrap, {
-      label: 'Branch name', value: '', placeholder: 'e.g. fix/login-redirect',
-      onChange: (value) => {
-        branchName = value; branchNameField.update({ value });
-        updateStartAgentAvailability();
-      },
-    });
-    branchWrap.append(el('p', 'kb-muted', 'Folder name follows the branch name — this SDK has no way to set a separate folder name.'));
-    const baseBranchWrap = el('div'); newBranchFields.append(baseBranchWrap);
-    const baseBranchSelect = mountSelect(baseBranchWrap, {
-      label: 'Based on', value: baseBranchSelection, options: defaultBaseBranchOptions, searchable: true,
-      searchPlaceholder: 'Search branches…',
-      onChange: (value) => {
-        baseBranchSelection = value; baseBranchSelect.update({ value });
-        updateStartAgentAvailability();
-      },
-    });
-    const baseBranchNote = el('p', 'kb-muted kb-span2');
-    newBranchFields.append(baseBranchNote);
-
-    // Existing worktree: just pick one. No branch/base-branch fields — reusing an
-    // existing worktree doesn't create anything new.
-    const existingWorktreeFields = el('div'); fieldsWrap.append(existingWorktreeFields);
-    existingWorktreeFields.hidden = true;
-    const existingWorktreeSelect = mountSelect(existingWorktreeFields, {
-      label: 'Worktree', value: null, placeholder: 'Choose a worktree…', options: [],
-      onChange: (value) => { existingWorktreeId = value; existingWorktreeSelect.update({ value }); updateStartAgentAvailability(); },
-    });
-    const existingWorktreeNote = el('p', 'kb-muted', '');
-    existingWorktreeFields.append(existingWorktreeNote);
-
-    const needsBeforeStartNote = el('p', 'kb-muted', '');
-    startRoot.append(needsBeforeStartNote);
-    // The button itself sits in the footer's slot (created earlier), so the
-    // primary and blocking actions of this dialog share one place.
-    const canStartAgent = () => {
-      if (!projectId || !title.trim() || !description.trim()) return false;
-      if (startFromMode === DESTINATION_NEW) {
-        if (!branchName.trim()) return false;
-        if (branchNameConflictsWithBase(branchName, resolveBaseBranch(baseBranchSelection))) return false;
-      }
-      if (startFromMode === 'existing') return existingWorktreeId.length > 0;
-      return true;
-    };
-    const startButton = mountButton(startAgentSlot, {
+    let startBusy = false;
+    startRoot.append(el('p', 'kb-muted', 'Starts a real OpenCode session with the description above as its first message, running directly in the project root, and links it to this task.'));
+    // The button lives here now, at the top of its own section (it used to sit
+    // in the footer next to Save) — it is this section's action, not the task
+    // body's: what it writes is the session link.
+    const canStartAgent = () => Boolean(projectId && title.trim() && description.trim());
+    const startButton = mountButton(startRoot, {
       label: 'Start Agent', disabled: !canStartAgent(),
       onClick: () => {
         void (async () => {
           if (startBusy || !canStartAgent()) return;
           startBusy = true; startButton.update({ loading: true });
           try {
-            const destination = startFromMode === 'existing' ? existingWorktreeId : startFromMode;
-            const worktree = buildSessionWorktree(destination, branchName, resolveBaseBranch(baseBranchSelection));
             // Whatever is currently typed, saved or not — Start Agent must not silently
             // fall back to the title/description this task had when the popup opened.
             // (The start block only exists when `onStartAgent` was provided.)
-            await props.onStartAgent?.({ projectId, worktree, title, description });
+            await props.onStartAgent?.({ projectId, title, description });
           } catch (error) { showError(error); }
           finally { startBusy = false; startButton.update({ loading: false }); }
         })();
       },
     });
+    const needsBeforeStartNote = el('p', 'kb-muted', ''); startRoot.append(needsBeforeStartNote);
     updateStartAgentAvailability = () => {
       const missing: string[] = [];
       if (!projectId) missing.push('choose a project');
       if (!title.trim()) missing.push('give it a title above');
       if (!description.trim()) missing.push('add a description above');
-      if (startFromMode === DESTINATION_NEW) {
-        if (!branchName.trim()) missing.push('name the new branch');
-        else if (branchNameConflictsWithBase(branchName, resolveBaseBranch(baseBranchSelection))) {
-          missing.push("pick a different base branch — it can't be the same as the new branch name");
-        }
-      }
-      if (startFromMode === 'existing' && !existingWorktreeId) missing.push('choose a worktree');
       startButton.update({ disabled: missing.length > 0 });
       needsBeforeStartNote.hidden = missing.length === 0;
       if (missing.length > 0) needsBeforeStartNote.textContent = `Before you can start an agent: ${missing.join(', ')}.`;
     };
     updateStartAgentAvailability();
-
-    const noKnownBranchesNote = 'The local branch-lookup service isn\'t approved or available, and this project has no existing worktree to list branches from either — only "Use project default" is available. Approve the service in Settings → Extensions for a searchable branch list.';
-    baseBranchNote.textContent = '';
-    refreshWorktreeOptions = () => {
-      const generation = ++worktreeGeneration;
-      baseBranchSelect.update({ value: baseBranchSelection, options: defaultBaseBranchOptions });
-      existingWorktreeSelect.update({ value: existingWorktreeId || null, options: [] });
-      existingWorktreeNote.textContent = '';
-      if (!projectId) { baseBranchNote.textContent = ''; return; }
-      void props.loadWorktreeInfo(projectId).then((info) => {
-        if (generation !== worktreeGeneration) return;
-        existingWorktreeSelect.update({ options: info.destinations.map((w) => ({ id: w.id, label: w.label, hint: w.hint, disabled: w.disabled })) });
-        if (info.destinations.length === 0) existingWorktreeNote.textContent = 'No existing worktrees in this project yet.';
-        baseBranchSelect.update({ options: info.baseBranches });
-        baseBranchNote.textContent = info.hasKnownBranches ? '' : noKnownBranchesNote;
-      }, (error) => { if (generation === worktreeGeneration) showError(error); });
-    };
-    refreshWorktreeOptions();
   }
 
   let picker: { dispose: () => void } | null = null;
@@ -528,7 +434,6 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   renderPicker();
 
   dialog.append(errorSlotBottom);
-  dialog.appendChild(footer);
   dialog.focus();
 
   const dispose = () => {

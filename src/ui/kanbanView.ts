@@ -11,10 +11,10 @@ import { el } from './dom.ts';
  * `page` mode: five columns side by side, cards, a tap opens the task's
  * detail view. The rail panel mounts it in `rail` mode: the same five views
  * stacked as sections, slim rows. Every interactive affordance — the primary
- * tap, the ✓ mark-done shortcut, the ⋯ menu, dragging, folding, selection,
- * column cleanup — renders only when the surface supplies the matching
- * handler, so a surface that passes none (the rail: a pure display mirror)
- * renders the identical layout with nothing to click.
+ * tap, the ✓ mark-done shortcut, the rail's chat button, the ⋯ menu, dragging,
+ * folding, selection, column cleanup — renders only when the surface supplies
+ * the matching handler, so a surface that passes none renders the identical
+ * layout with nothing to click.
  * Everything the two surfaces must never disagree on lives here: the item
  * body (title, project line, agent pill), the ⋯ menu
  * structure, the drop math, keyboard activation, and the attention flag.
@@ -35,9 +35,9 @@ export type KanbanHandlers = {
   onDrop?: (id: string, status: TaskStatus, beforeId: string | null) => void;
   /** Rail only — a drop on a section header appends at the column's end. */
   onDropEnd?: (id: string, status: TaskStatus) => void;
-  /** Rail attention rows: open the linked chat without opening any dialog. */
-  onOpenChat?: (task: Task) => void;
-  /** Rail rows: a deliberate Done — the rail's one write, through the same kept-rank path as the ⋯ menu. */
+  /** Rail rows: the chat button beside the ✓ — the linked card's chat, or, when there is none, a chat started attached to the card (see the panel's wiring). */
+  onChat?: (task: Task) => void;
+  /** Rail rows: a deliberate Done — the rail's Done write, through the same kept-rank path as the ⋯ menu. */
   onMarkDone?: (task: Task) => void;
   /**
    * Page cards only: the ✓ inside the "looks done" affordance — a deliberate
@@ -68,18 +68,24 @@ export type KanbanView = {
 /**
  * The icon set for the small square buttons (the same 24-viewBox style the
  * dictation panel uses — `.kb-dict-iconbtn`'s idiom, reused by `.kb-iconbtn`):
- * a check for "mark done", a speech bubble for "open chat", and a trash can
- * for the column head's "empty column".
+ * a check for "mark done", a speech bubble for "open chat", the same bubble
+ * with a plus cut out for "new chat", and a trash can for the column head's
+ * "empty column".
  */
 const CHECK_DONE_PATH = 'M10 15.172l9.192-9.193 1.415 1.414L10 18l-6.364-6.364 1.414-1.414z';
 const CHAT_PATH =
   'M20 2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4l4 4 3-4h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z';
+/** The start-of-a-chat glyph: the bubble with a plus punched out of its fill ("evenodd"). */
+const NEW_CHAT_PATH = `${CHAT_PATH} M9.25 5.75h1.5v6.5H9.25z M6.75 8.25h6.5v1.5H6.75z`;
 const TRASH_PATH =
   'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z';
 const svgGlyph = (path: string): SVGElement => {
   const node = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   node.setAttribute('viewBox', '0 0 24 24');
   node.setAttribute('fill', 'currentColor');
+  // evenodd is what makes the new-chat glyph's plus a hole in the bubble
+  // fill; for plain single-loop glyphs it matches nonzero exactly.
+  node.setAttribute('fill-rule', 'evenodd');
   node.setAttribute('aria-hidden', 'true');
   const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   shape.setAttribute('d', path);
@@ -231,19 +237,29 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     if (line) sub.append(agentPill(line));
     main.append(sub);
 
-    // Attention actions are a small-icon affordance: Open chat — a deliberate
-    // tap, the only one an attention row offers besides marking done.
-    if (rail && item.attention && task.sessionId && handlers.onOpenChat) {
-      const onOpenChat = handlers.onOpenChat;
-      const actions = el('div', 'kb-panel-actions');
-      actions.append(iconButton(CHAT_PATH, 'Open chat', () => onOpenChat(task), { primary: true }));
-      main.append(actions);
+    // The rail's chat affordance, beside the ✓: on a linked card it opens
+    // that chat (any status — its history is worth opening; a Done card
+    // carries none of the other affordances but keeps this one); on an
+    // unlinked card that could receive one (a project to run in, not Done)
+    // the plus-cut glyph starts a chat attached to the card instead. Always
+    // visible like the ✓ (a finger has no hover); on an attention row the
+    // button wears the filled primary tint so the way in to the waiting
+    // chat is unmistakable.
+    if (rail && handlers.onChat && (task.sessionId || (task.projectId && item.displayStatus !== 'done'))) {
+      const onChat = handlers.onChat;
+      top.append(iconButton(
+        task.sessionId ? CHAT_PATH : NEW_CHAT_PATH,
+        task.sessionId ? 'Open chat' : 'New chat',
+        () => onChat(task),
+        task.sessionId && item.attention ? { primary: true } : {},
+      ));
     }
 
     // Every non-done rail row carries a mark-done ✓ at its right edge —
-    // always visible, tinted with the app's info tone. This is the rail's one
-    // deliberate write: Done stays a user-only click on every surface; Done
-    // rows show no affordance because they need none.
+    // always visible, tinted with the app's info tone. This is the rail's
+    // Done write: Done stays a user-only click on every surface; Done rows
+    // show no affordance because they need none. The chat button appended
+    // just before it is the rail's other carve-out.
     if (rail && item.displayStatus !== 'done' && handlers.onMarkDone) {
       const onMarkDone = handlers.onMarkDone;
       top.append(iconButton(CHECK_DONE_PATH, 'Mark done', () => onMarkDone(task), { info: true }));

@@ -4,19 +4,19 @@ import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, ty
 import { ALL_PROJECTS, NO_PROJECT, planStatusMoves, rankAtEnd, type BoardFilter } from '../domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
 import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
-import { deleteTask, loadTasks, saveTask } from '../store/taskStore.ts';
+import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
 import { loadDismissedSessions, saveDismissedSessions } from '../store/dismissedSessions.ts';
 import { describeHostError, describeStartSessionDelivery, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
-import { fetchServiceBranches } from '../host/branchService.ts';
 import { createSessionSync } from '../host/sessionSync.ts';
 import { createWorktreeSync } from '../host/worktreeSync.ts';
 import { watchOrphanSessions } from '../host/orphanSessions.ts';
 import { DEFAULT_SYNC_OPTIONS } from '../domain/sync.ts';
 import { sessionLinkState, worktreeLinkState, type SessionGoneReason, type SessionsView, type WorktreesView } from '../domain/unlink.ts';
+import { EXTENSION_ID, taskUrl } from '../domain/chatLink.ts';
 import { sessionTitleForTask, titleForOrphanSession } from '../domain/autoTask.ts';
-import { buildBaseBranchOptions, describeWorktreeOption, hasKnownBranches, resolveTaskWorktree } from '../domain/worktree.ts';
+import { resolveTaskWorktree } from '../domain/worktree.ts';
 import { mountTaskDetail } from './detail.ts';
 import { createDictation } from '../host/dictation.ts';
 import { mountKanbanView } from './kanbanView.ts';
@@ -36,10 +36,6 @@ export type BoardHost = Pick<
  * session does afterwards; only the user's own Mark Done ever sets it.
  */
 const SYNC_OPTIONS = DEFAULT_SYNC_OPTIONS;
-
-const EXTENSION_ID = 'kanban-board';
-/** Never dereferenced by the host; only shown as this task's chip link. */
-const taskUrl = (id: string) => `https://kanban.local/tasks/${id}`;
 
 /**
  * The full-screen board is the same kanban view as the rail panel, across
@@ -332,27 +328,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
    * possible.
    */
   let startingAgents = 0;
-
-  /**
-   * Retries a critical link-save a few times before giving up. Used only
-   * right after a real session has already been created (`startSession`
-   * succeeded) or an existing one deliberately linked — at that point a
-   * transient storage failure (the kind that produced "HOST_REJECTED" once
-   * before) must not silently lose the link, since the session is already
-   * real, already possibly running, and already claimed in
-   * `attemptedSessions` so the orphan watcher won't duplicate it. Losing
-   * the link here would leave it on neither path: not on this task, and
-   * never auto-adopted either.
-   */
-  const saveTaskRetrying = async (next: Task, attempts = 3): Promise<void> => {
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      try { await saveTask(host, next); return; }
-      catch (error) {
-        if (attempt === attempts) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
-      }
-    }
-  };
+  // Critical link-saves below retry through `saveTaskRetrying` (taskStore):
+  // a session created or deliberately linked must not lose its link to a
+  // transient storage failure — a lost link sits on neither path.
   /**
    * The persisted "going forward" cutoff (see `store/orphanWatermark.ts`):
    * a session is only adoptable if it was created at or after this time.
@@ -685,7 +663,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
           ...(sessionProjectId ? { projectId: sessionProjectId } : {}),
           status: current.status === 'backlog' ? 'todo' : current.status,
         });
-        await saveTaskRetrying(updated);
+        await saveTaskRetrying(host, updated);
         if (dismissedSessionIds.delete(sessionId)) {
           // Explicitly linking a dismissed session brings it back by choice.
           // If cleanup fails, retain the in-memory dismissal; the new task
@@ -711,21 +689,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         const result = await fetchSessions(host, projectId);
         return result.sessions.map((s) => ({ id: s.id, title: s.title, activity: s.activity }));
       },
-      loadWorktreeInfo: async (projectId) => {
-        const result = await fetchWorktrees(host, projectId);
-        // The local git-branch service gives the real repository branch list, same
-        // as OpenChamber's own "New Worktree" dialog; falls back to worktree-derived
-        // branches (silently — see fetchServiceBranches) when it's not approved,
-        // running, or supported on this platform.
-        const directory = projects.find((p) => p.id === projectId)?.directory ?? null;
-        const serviceBranches = directory ? await fetchServiceBranches(host, directory) : null;
-        return {
-          destinations: result.worktrees.map(describeWorktreeOption),
-          baseBranches: serviceBranches ?? buildBaseBranchOptions(result.worktrees),
-          hasKnownBranches: serviceBranches ? serviceBranches.length > 2 : hasKnownBranches(result.worktrees),
-        };
-      },
-      onStartAgent: async ({ projectId, worktree, title, description }) => {
+      onStartAgent: async ({ projectId, title, description }) => {
         const text = description.trim() || title;
         let result;
         // Paused for exactly this long: the host can report the session it is in the
@@ -734,40 +698,26 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         // as this task's own link, not a second, unrelated one. See `startingAgents`.
         startingAgents += 1;
         try {
-          try {
-            result = await host.startSession({
-              providerId: EXTENSION_ID,
-              id: task.id,
-              title: sessionTitleForTask({ title, description }),
-              url: taskUrl(task.id),
-              text,
-              projectId,
-              worktree,
-              // Not 'open': that asks the host to navigate as part of resolving this
-              // very call, which could tear this page down before any of the code
-              // below — claiming the session, saving the link — ever runs.
-              // `host.openSession` below, called only once everything here is safely
-              // saved, is this extension's one and only navigation trigger.
-              navigation: 'preserve',
-            });
-          } catch (error) {
-            // OpenChamber's own worktree-creation endpoint can return "Remote branch
-            // not found: <name>" here, confirmed in testing to fire even for a branch
-            // that genuinely exists on the remote and is already fetched locally — a
-            // real OpenChamber bug, not a sign the name is wrong. That real reason
-            // doesn't survive the trip through startSession from an extension either;
-            // it collapses to a generic failure here, worth reporting upstream with
-            // the exact base branch below if it keeps happening.
-            if (typeof worktree === 'object' && worktree.kind === 'new' && worktree.baseBranch) {
-              throw new Error(
-                `Starting the agent failed (${describeHostError(error)}) while basing a new branch on ` +
-                `"${worktree.baseBranch}". OpenChamber doesn't pass along its real reason here, only this ` +
-                `generic failure — even when the base branch is correct and already fetched. Worth reporting ` +
-                `as an OpenChamber bug if it persists.`,
-              );
-            }
-            throw error;
-          }
+          // The detail dialog starts agents from the project root only — the
+          // SDK's `false` worktree, no branch or worktree to pass through.
+          // The base-branch error rewrite the old "New branch" picker needed
+          // (OpenChamber collapsing its real reason to a generic failure)
+          // never fires for a root start.
+          result = await host.startSession({
+            providerId: EXTENSION_ID,
+            id: task.id,
+            title: sessionTitleForTask({ title, description }),
+            url: taskUrl(task.id),
+            text,
+            projectId,
+            worktree: false,
+            // Not 'open': that asks the host to navigate as part of resolving this
+            // very call, which could tear this page down before any of the code
+            // below — claiming the session, saving the link — ever runs.
+            // `host.openSession` below, called only once everything here is safely
+            // saved, is this extension's one and only navigation trigger.
+            navigation: 'preserve',
+          });
         } finally {
           startingAgents -= 1;
         }
@@ -794,9 +744,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
           sessionId: result.sessionId,
           projectId,
           status: 'in_progress',
-          worktree: resolveTaskWorktree(worktree, result),
+          worktree: resolveTaskWorktree(false, result),
         });
-        await saveTaskRetrying(updated);
+        await saveTaskRetrying(host, updated);
         // Awaited before navigating away — see the matching comment in `onOpenChat`.
         await persistOpenTask(null);
         // The duplicate (if any) is dropped from in-memory state here, not just

@@ -11,7 +11,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 - Click the **+** in the toolbar. This creates and saves a new task right away, titled "New task", and opens it for you to edit. Later edits are saved by **Save changes** or when you click **Start Agent**.
 - In the task, change the title. Add a description. The description is sent as the agent's first message.
 - Choose a project.
-- Click **Start Agent**. You do not need to click **Save changes** first. It uses and saves the title, description, and project you have on screen. Pick where it runs: the project's main folder, a new branch, or a worktree you already have.
+- Click **Start Agent**. You do not need to click **Save changes** first. It uses and saves the title, description, and project you have on screen. It always runs in the project's main folder — there is no worktree or branch to choose.
 - The new chat uses the task title. If the title is still "New task", it uses the first line of the description instead. The description is sent as the first message. If OpenChamber reports that it was not sent, the board tells you; the description remains saved on the task, so you can open the chat and paste it in.
 - The task now links to that chat and moves to **In Progress**. Click the task card later, and it opens the same chat again.
 - You can also link an already-running chat to a task, instead of starting a new one.
@@ -36,7 +36,7 @@ A "Project: …" line under the header names the focused project. When no projec
 
 Every task shows the same information on both the page and the panel: its title, its project, and one colored, glyphed pill about the agent — a spinner for running or retrying, ? for "needs your answer", a shield for "needs permission", ! for failed, ✓ for finished — using the same tones as OpenChamber's own badges. Rows that need your review carry the same orange border as on the page, and the badge turns orange while unseen rows wait.
 
-The panel follows agents in real time. If an agent finishes while the page is closed, the row already sits under Review — the pill carries what the agent is doing and the row's new section carries the move. One quick write lives on the panel: every row that is not Done carries a small **blue ✓** at its right edge — always visible, tinted with OpenChamber's own info tone — and a click marks the task Done, exactly like the ✓ on the full board's cards. Done is still a human decision everywhere; the panel never marks anything on its own. It has no other clicks: no opening, no moving, no quick-add, no deleting, no editing. To do anything else, use the full board from the Extension pages menu — that is the thinking: the panel is for looking at what the agents are up to in the project you have open (and for that one fastest-of-all marks), the page is for doing.
+The panel follows agents in real time. If an agent finishes while the page is closed, the row already sits under Review — the pill carries what the agent is doing and the row's new section carries the move. Two quick actions live on the panel, both always visible at a row's right edge. The small **blue ✓** on every row that is not Done marks the task Done, exactly like the ✓ on the full board's cards — Done is still a human decision everywhere, and the panel never marks anything on its own. Beside it sits a **chat button**: on a card with a linked chat it opens that chat (and clears the orange border, because opening a waiting chat is exactly what being reviewed means); on a card with none it starts a new chat **attached to the card** — an empty one, so you write the first message, running in the card's own worktree when it has one — opens it, and links it to the card, without ever moving the card between columns: if the agent starts working, the pill shows it right away, and the board makes the move real the next time you open it. Cards without a project show no chat button. It has no other clicks: no opening, no moving, no quick-add, no deleting, no editing. To do anything else, use the full board from the Extension pages menu — that is the thinking: the panel is for looking at what the agents are up to in the project you have open (and for the fastest mark-done and the fastest way into a card's chat), the page is for doing.
 
 ### The Review column moves on its own
 
@@ -118,12 +118,8 @@ npm run check
 
 The approval screen calls this "Run a local service" and says it runs with your full user access. That sounds broad, so here is exactly what it does:
 
-- It runs **one command only**: `git for-each-ref`, which **reads** your repository's branch names. It does not read file contents, does not read commit messages, does not write anything, and does not touch your git history.
-- It only runs for a project directory already in your OpenChamber project list — never any other folder.
-- It only answers OpenChamber itself, on your own computer. It never connects to the internet on its own.
-- Its only purpose is filling in the "Based on" dropdown in **Start Agent** with your repository's real branch names, so you can search for one instead of typing it by hand.
-
-If you don't approve it, or it isn't running, "Based on" still works — it just offers fewer branches (only ones that already have a worktree) plus "Use project default".
+- It carries the board's **dictation**: when you dictate a description with the microphone, the audio goes to this service and is transcribed on your own computer — your voice never leaves your machine, and nothing connects to the internet on its own.
+- It runs **one command only**: `git for-each-ref`, which **reads** your repository's branch names. It only runs for a project directory already in your OpenChamber project list — never any other folder. The board itself no longer asks for that list: **Start Agent** now always runs in the project's main folder, so there is no branch to pick anymore — the command exists only because the route is still declared from an older version of this dialog.
 
 ## What this extension cannot do
 
@@ -131,7 +127,6 @@ Some things are not possible with the current OpenChamber SDK (SDK = the toolkit
 
 - **It cannot see "Chats."** In OpenChamber, a Chat is a conversation with no project attached. This board only knows about chats inside a project. A Chat with no project never shows up here.
 - **It cannot watch for new chats while you are in a different chat.** Starting a chat always switches your screen away from this board. The board can only check for new chats the next time you open it.
-- **It cannot set a separate folder name for a new worktree.** The branch name and the folder name are always the same.
 
 
 
