@@ -12,6 +12,7 @@ import { describeHostError, fetchSessions, fetchWorktrees, watchProjects } from 
 import { createSessionSync } from '../host/sessionSync.ts';
 import { createWorktreeSync } from '../host/worktreeSync.ts';
 import { watchOrphanSessions } from '../host/orphanSessions.ts';
+import { fillComposerAfterOpen } from '../host/promptFill.ts';
 import { DEFAULT_SYNC_OPTIONS } from '../domain/sync.ts';
 import { sessionLinkState, worktreeLinkState, type SessionGoneReason, type SessionsView, type WorktreesView } from '../domain/unlink.ts';
 import { EXTENSION_ID, chatPromptForTask, taskUrl } from '../domain/chatLink.ts';
@@ -766,15 +767,24 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
           closeDetail();
           return;
         }
-        closeDetail();
         // The prompt: populate, never send — `prompt` with `send` omitted
         // replace-composes on the current session (the one just opened) with
         // the description on screen (else its title), waiting for the user's
-        // own send. Fire-and-forget: the page may be gone before it settles,
-        // and the text stays safe on the task either way.
-        void host.prompt({ text: chatPromptForTask({ title, description }) }).catch(() => {
-          void host.toast({ kind: 'info', message: `The chat was created but its composer wasn't filled — the description is still on the task "${title}".` }).catch(() => undefined);
+        // own send. Issued before `closeDetail`, in the same task the open
+        // resolved in — the tail order the rail mirror's working path keeps.
+        // The write itself races the host's switch commit for the composer's
+        // one pending-input slot, which is how the expanded panel could lose
+        // the fill while the rail always won; `fillComposerAfterOpen` writes
+        // now and once more once the switch has settled. A fill provably
+        // gone says so; the text stays safe on the task either way.
+        fillComposerAfterOpen(host, chatPromptForTask({ title, description }), {
+          onLost: () => {
+            void host.toast({ kind: 'info', message: `The chat was created but its composer wasn't filled — the description is still on the task "${title}".` }).catch(() => undefined);
+          },
         });
+        // Closed only after the fill is dispatched: the dialog teardown must
+        // not precede the last write this flow makes from this surface.
+        closeDetail();
       },
     });
   };

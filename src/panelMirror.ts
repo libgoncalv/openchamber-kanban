@@ -9,6 +9,7 @@ import { applyPatch, type Task } from './domain/task.ts';
 import { DEFAULT_SYNC_OPTIONS } from './domain/sync.ts';
 import { createSessionSync } from './host/sessionSync.ts';
 import { describeHostError, projectForDirectory } from './host/workspace.ts';
+import { fillComposerAfterOpen } from './host/promptFill.ts';
 import { mountKanbanView } from './ui/kanbanView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { el } from './ui/dom.ts';
@@ -219,10 +220,15 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       // The prompt: populate, never send — `prompt` with `send` omitted
       // replace-composes on the current session (the one just opened) with
       // the card's description, else its title, waiting for the user's own
-      // send. Fire-and-forget: the panel may be gone before it settles, and
-      // the text stays safe on the card either way.
-      void host.prompt({ text: chatPromptForTask(current) }).catch(() => {
-        void host.toast({ kind: 'info', message: `The chat was created but its composer wasn't filled — the description is still on the card "${current.title}".` }).catch(() => undefined);
+      // send. This is the tail order that always won at rail width: the
+      // write goes out in the same task the open resolved in, nothing
+      // between. Behind it, `fillComposerAfterOpen` repeats the write once
+      // the host's switch commit has settled — the race documented on the
+      // module — so the same path stays right as the frame's surfaces grow.
+      fillComposerAfterOpen(host, chatPromptForTask(current), {
+        onLost: () => {
+          void host.toast({ kind: 'info', message: `The chat was created but its composer wasn't filled — the description is still on the card "${current.title}".` }).catch(() => undefined);
+        },
       });
     },
   });
