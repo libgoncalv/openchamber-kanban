@@ -203,7 +203,7 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
    rides them at every non-done row's right edge and never hides. */
 .kb-panel-row .kb-iconbtn{width:26px;height:26px}
 .kb-panel-row .kb-iconbtn svg{width:13px;height:13px}
-/* The rail's looks-done chip speaks success, unlike the warning → Review chip. */
+/* The rail's looks-done chip speaks success — the only chip a row wears. */
 .kb-panel-chip[data-ok]{color:var(--oc-success,var(--status-success,#46a758));background:color-mix(in srgb,var(--oc-success,var(--status-success,#46a758)) 13%,transparent)}
 [hidden]{display:none!important}
 `;

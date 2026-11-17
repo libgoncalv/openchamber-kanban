@@ -16,7 +16,7 @@ import { el } from './dom.ts';
  * a surface that passes none (the rail: a pure display mirror) renders the
  * identical layout with nothing to click.
  * Everything the two surfaces must never disagree on lives here: the item
- * body (title, project line, agent pill, → chip), the ⋯ menu
+ * body (title, project line, agent pill), the ⋯ menu
  * structure, the drop math, keyboard activation, and the attention flag.
  * Only the layout differs, because the width does.
  */
@@ -217,16 +217,14 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
       top.append(iconButton(CHECK_DONE_PATH, 'Mark done', () => onMarkDone(task), { info: true }));
     }
 
-    // The rail's display-only chip. The looks-done state outranks the agent-move
-    // chip: once a finished session has been quiet this long, the move it made
-    // (already persisted or about to be) says less than the quiet does.
+    // The rail's display-only chip: a finished session that has stayed quiet.
     // The page card shows the state as the ✓ button instead — this chip is rail-only.
+    // The pill is the one status signal an item wears: a display-only agent move
+    // shows as the row's position under the section head, never as a → chip.
     if (rail && item.looksDone) {
       const chip = el('span', 'kb-panel-chip', '✓ looks done');
       chip.dataset.ok = 'true';
       item_.append(chip);
-    } else if (item.movedByAgent) {
-      item_.append(el('span', 'kb-panel-chip', `→ ${STATUS_LABELS[item.displayStatus]}`));
     }
 
     const menuItems = itemMenuItems(item, handlers);

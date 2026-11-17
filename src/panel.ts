@@ -22,8 +22,8 @@ import { el } from './ui/dom.ts';
  * nothing: the full screen page (Extension pages menu) is still the only
  * surface where tasks are opened, edited, moved (other columns), created, or
  * deleted. What it does update by itself is what it shows: live agent state
- * per linked session, regrouped for display only — the → chip marks a move
- * the board page will persist the next time it opens.
+ * per linked session, regrouped for display only — where a row sits marks the
+ * move the board page will persist the next time it opens.
  */
 const host = connectHost();
 const root = document.querySelector('#root');
