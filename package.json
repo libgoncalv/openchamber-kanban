@@ -4,6 +4,11 @@
   "private": true,
   "description": "Local-first Kanban board for OpenChamber that links tasks to real OpenCode sessions.",
   "license": "MIT",
+  "author": "Libio Goncalves Braz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/libgoncalv/openchamber-kanban.git"
+  },
   "type": "module",
   "openchamber": {
     "apiVersion": 1,

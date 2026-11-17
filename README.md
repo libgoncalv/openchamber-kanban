@@ -86,7 +86,7 @@ If you start a chat in OpenChamber another way — for example, from the sidebar
 **1. Get the code.**
 
 ```bash
-git clone https://github.com/<your-username>/openchamber-kanban.git
+git clone https://github.com/libgoncalv/openchamber-kanban.git
 cd openchamber-kanban
 ```
 
@@ -133,3 +133,8 @@ Some things are not possible with the current OpenChamber SDK (SDK = the toolkit
 ## Project files
 
 See `ARCHITECTURE.md` for the full technical write-up: how each file works and the exact SDK limits behind each design choice.
+
+## Credits
+
+This project began as [mannu150/openchamber-kanban](https://github.com/mannu150/openchamber-kanban)
+by Mohit Anand. It has since diverged and is now maintained independently.
