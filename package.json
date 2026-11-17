@@ -15,7 +15,7 @@
         "id": "kanban-board",
         "name": "Kanban",
         "icon": "task",
-        "entry": "panel/index.html",
+        "entry": "panel/frame.html",
         "mobile": true
       },
       "page": {

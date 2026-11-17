@@ -3,6 +3,7 @@ import { build } from 'esbuild';
 const browserEntries = [
   ['src/page.ts', 'panel/page.js'],
   ['src/panel.ts', 'panel/main.js'],
+  ['src/frame.ts', 'panel/frame.js'],
 ];
 
 for (const [entry, outfile] of browserEntries) {
