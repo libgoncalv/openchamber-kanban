@@ -54,8 +54,8 @@ export type ActivityLine = { key: ActivityKey; text: string; tone: ActivityTone 
  *  - `'hint'` — the task is unseen (`needsAttentionSince` set): the
  *    success-tinted ✓ on the page card, always visible — it IS the suggestion.
  *  - `'quiet'` — the task was seen (marker cleared): the same ✓ muted, revealed
- *    on hover/focus like the ⋯ menu. On the rail both states show as the same
- *    display-only `✓ looks done` chip.
+ *    on hover/focus like the ⋯ menu. Page cards only — the rail wears no
+ *    looks-done signal of its own.
  */
 export type LooksDoneState = 'hint' | 'quiet' | null;
 

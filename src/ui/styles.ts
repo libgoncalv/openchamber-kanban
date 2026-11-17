@@ -188,7 +188,6 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-agent-dotg{width:4px;height:4px;border-radius:9999px;background:currentColor;flex:none;margin:0 2px}
 .kb-agent-spin{animation:kb-spin 1.2s linear infinite;transform-origin:center}
 @media (prefers-reduced-motion:reduce){.kb-agent-spin{animation:none}}
-.kb-panel-chip{flex:none;font-size:10px;font-weight:500;color:var(--oc-warning,#e5a234);background:color-mix(in srgb,var(--oc-warning,#e5a234) 13%,transparent);padding:1px 6px;border-radius:9999px}
 .kb-rail-foot{display:flex;align-items:center;gap:10px;justify-content:space-between}
 .kb-rail-foot p{margin:0}
 .kb-panel-empty{font-size:12px;color:var(--oc-muted);padding:4px 2px}
@@ -239,8 +238,6 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
    and the ✓ (data-info) ride them at a row's right edge and never hide. */
 .kb-panel-row .kb-iconbtn{width:26px;height:26px}
 .kb-panel-row .kb-iconbtn svg{width:13px;height:13px}
-/* The rail's looks-done chip speaks success — the only chip a row wears. */
-.kb-panel-chip[data-ok]{color:var(--oc-success,var(--status-success,#46a758));background:color-mix(in srgb,var(--oc-success,var(--status-success,#46a758)) 13%,transparent)}
 [hidden]{display:none!important}
 `;
 

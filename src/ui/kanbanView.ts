@@ -41,8 +41,8 @@ export type KanbanHandlers = {
   onMarkDone?: (task: Task) => void;
   /**
    * Page cards only: the ✓ inside the "looks done" affordance — a deliberate
-   * Done through the same kept-rank path as the ⋯ menu. The rail shows the
-   * state as a display-only chip instead, and writes Done through `onMarkDone`.
+   * Done through the same kept-rank path as the ⋯ menu. The rail carries no
+   * looks-done signal and writes Done through `onMarkDone`.
    */
   onLooksDone?: (task: Task) => void;
   /** Toggling one card's selection (checkbox click, or Ctrl/⌘-click on the card body). Absent — no checkbox renders and the card never selects. */
@@ -265,15 +265,9 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
       top.append(iconButton(CHECK_DONE_PATH, 'Mark done', () => onMarkDone(task), { info: true }));
     }
 
-    // The rail's display-only chip: a finished session that has stayed quiet.
-    // The page card shows the state as the ✓ button instead — this chip is rail-only.
-    // The pill is the one status signal an item wears: a display-only agent move
-    // shows as the row's position under the section head, never as a → chip.
-    if (rail && item.looksDone) {
-      const chip = el('span', 'kb-panel-chip', '✓ looks done');
-      chip.dataset.ok = 'true';
-      item_.append(chip);
-    }
+    // No rail chips: the pill is the one status signal an item wears — a
+    // display-only agent move shows as the row's position under the section
+    // head, never as a → chip.
 
     const menuItems = itemMenuItems(item, handlers);
     // The "looks done" ✓ beside the ⋯ menu — page cards only. 'hint' (unseen)
