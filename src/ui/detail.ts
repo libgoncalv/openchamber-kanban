@@ -372,7 +372,7 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
 
   if (hasStartAgent) {
     let startBusy = false;
-    startRoot.append(el('p', 'kb-muted', 'Starts a real OpenCode session with the description above as its first message, running directly in the project root, and links it to this task.'));
+    startRoot.append(el('p', 'kb-muted', 'Starts a real OpenCode session, running directly in the project root, and links it to this task. The chat opens with the description above pre-filled in its composer — the agent only starts when you send it.'));
     // The button lives here now, at the top of its own section (it used to sit
     // in the footer next to Save) — it is this section's action, not the task
     // body's: what it writes is the session link.

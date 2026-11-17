@@ -6,6 +6,7 @@ import {
   EXTENSION_ID,
   buildLinkPatch,
   buildStartSessionRequest,
+  chatPromptForTask,
   taskUrl,
 } from '../src/domain/chatLink.ts';
 
@@ -61,4 +62,9 @@ test('buildLinkPatch falls back to the requested worktree directory the host did
   const patch = buildLinkPatch(request, result);
   assert.equal(patch.sessionId, 'ses_2');
   assert.deepEqual(patch.worktree, { directory: '/repo/.worktrees/w2', branch: null });
+});
+
+test('chatPromptForTask is the description — the title only when there is no description', () => {
+  assert.equal(chatPromptForTask(base), 'The login form rejects valid sessions');
+  assert.equal(chatPromptForTask({ ...base, title: 'Do it', description: '   \n  ' }), 'Do it', 'a blank description falls back to the title');
 });

@@ -44,3 +44,13 @@ export const buildLinkPatch = (request: StartSessionRequest, result: StartSessio
   sessionId: result.sessionId,
   worktree: resolveTaskWorktree(request.worktree ?? false, result),
 });
+
+/**
+ * The text a new chat's composer is pre-filled with: the card's description
+ * — what the agent is being asked — or the title when the description is
+ * empty. Never sent by itself: `host.prompt` with `send` omitted
+ * replace-composes it on the opened session and waits for the user's own
+ * send; a fill that never lands loses nothing, the text stays on the card.
+ */
+export const chatPromptForTask = (task: Pick<Task, 'title' | 'description'>): string =>
+  task.description.trim() || task.title;

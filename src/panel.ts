@@ -3,7 +3,7 @@ import type { GuestProject } from '@openchamber/sdk';
 import { applyHostReady, mountBadge } from '@openchamber/sdk/ui';
 import { loadTasks, saveTask, saveTaskRetrying } from './store/taskStore.ts';
 import { statusMove } from './store/taskOps.ts';
-import { buildLinkPatch, buildStartSessionRequest } from './domain/chatLink.ts';
+import { buildLinkPatch, buildStartSessionRequest, chatPromptForTask } from './domain/chatLink.ts';
 import { ALL_PROJECTS, matchesFilter } from './domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen } from './domain/boardView.ts';
 import { applyPatch, type Task } from './domain/task.ts';
@@ -143,8 +143,8 @@ host.onReady((ctx) => {
       // `openSession` may tear this frame down as part of resolving and a
       // fire-and-forget write would never reach storage (the page's
       // onOpenChat learned the same lesson). An unlinked card: start a chat
-      // attached to it — `startSession` with no `text`, the rail starts an
-      // empty chat the user writes into — and save the link before opening.
+      // attached to it — `startSession` with no `text` — open it, and fill
+      // its composer with the card's description (the steps at the bottom).
       const current = tasks.find((t) => t.id === task.id) ?? task;
       if (current.sessionId) {
         if (current.needsAttentionSince !== null) {
@@ -206,7 +206,23 @@ host.onReady((ctx) => {
       // Explicit navigation, deliberately last: the panel may go down as
       // part of resolving `openSession` — everything above (link, marker)
       // is already saved, the same ordering the page's navigation paths keep.
-      await host.openSession(result.sessionId);
+      try {
+        await host.openSession(result.sessionId);
+      } catch (error) {
+        // The chat exists, is linked, and opens again from this card's
+        // button: stop here. Populating a composer that was never the new
+        // chat's would write the description into some other chat.
+        void host.toast({ kind: 'error', message: `Started the chat, but it could not be opened — ${describeHostError(error)}.` }).catch(() => undefined);
+        return;
+      }
+      // The prompt: populate, never send — `prompt` with `send` omitted
+      // replace-composes on the current session (the one just opened) with
+      // the card's description, else its title, waiting for the user's own
+      // send. Fire-and-forget: the panel may be gone before it settles, and
+      // the text stays safe on the card either way.
+      void host.prompt({ text: chatPromptForTask(current) }).catch(() => {
+        void host.toast({ kind: 'info', message: `The chat was created but its composer wasn't filled — the description is still on the card "${current.title}".` }).catch(() => undefined);
+      });
     },
   });
 

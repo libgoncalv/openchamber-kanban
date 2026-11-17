@@ -41,7 +41,8 @@ export const deleteTask = (host: Storage, id: string) => host.storage.delete(tas
  * a session exists for real already — just created (`startSession` succeeded)
  * or deliberately linked — and a transient storage failure (the kind that
  * produced "HOST_REJECTED" once before) must not silently lose the link: the
- * session is real, possibly already running, and a lost link would leave it
+ * session is real, possibly already in use by an agent or its user, and a
+ * lost link would leave it
  * on neither path (not on the task, never adopted either).
  */
 export const saveTaskRetrying = async (host: Storage, task: Task, attempts = 3): Promise<void> => {

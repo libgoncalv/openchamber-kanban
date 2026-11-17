@@ -8,13 +8,13 @@ import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/task
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
 import { loadDismissedSessions, saveDismissedSessions } from '../store/dismissedSessions.ts';
-import { describeHostError, describeStartSessionDelivery, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
+import { describeHostError, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
 import { createSessionSync } from '../host/sessionSync.ts';
 import { createWorktreeSync } from '../host/worktreeSync.ts';
 import { watchOrphanSessions } from '../host/orphanSessions.ts';
 import { DEFAULT_SYNC_OPTIONS } from '../domain/sync.ts';
 import { sessionLinkState, worktreeLinkState, type SessionGoneReason, type SessionsView, type WorktreesView } from '../domain/unlink.ts';
-import { EXTENSION_ID, taskUrl } from '../domain/chatLink.ts';
+import { EXTENSION_ID, chatPromptForTask, taskUrl } from '../domain/chatLink.ts';
 import { sessionTitleForTask, titleForOrphanSession } from '../domain/autoTask.ts';
 import { resolveTaskWorktree } from '../domain/worktree.ts';
 import { mountTaskDetail } from './detail.ts';
@@ -25,7 +25,7 @@ import { el } from './dom.ts';
 
 export type BoardHost = Pick<
   HostClient,
-  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'serviceRequest' | 'toast' | 'openMicrophone'
+  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'prompt' | 'serviceRequest' | 'toast' | 'openMicrophone'
 >;
 
 /**
@@ -690,7 +690,6 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         return result.sessions.map((s) => ({ id: s.id, title: s.title, activity: s.activity }));
       },
       onStartAgent: async ({ projectId, title, description }) => {
-        const text = description.trim() || title;
         let result;
         // Paused for exactly this long: the host can report the session it is in the
         // middle of creating to this mount's own live orphan watcher before this very
@@ -702,13 +701,14 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
           // SDK's `false` worktree, no branch or worktree to pass through.
           // The base-branch error rewrite the old "New branch" picker needed
           // (OpenChamber collapsing its real reason to a generic failure)
-          // never fires for a root start.
+          // never fires for a root start. No `text` either: the description
+          // is populated into the chat's composer after it opens (below),
+          // nothing is sent until the user presses send.
           result = await host.startSession({
             providerId: EXTENSION_ID,
             id: task.id,
             title: sessionTitleForTask({ title, description }),
             url: taskUrl(task.id),
-            text,
             projectId,
             worktree: false,
             // Not 'open': that asks the host to navigate as part of resolving this
@@ -724,9 +724,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         if (result.sessionId === null) {
           throw new Error(`Could not start the agent (${result.failure}). Its worktree at ${result.directory} was kept so you can recover it by hand.`);
         }
-        // A real session now exists and is likely already running. Claim it right
-        // away — the one-id-specific guard that protects it from here on, now that
-        // the id is actually known, same as `startingAgents` did for the window before it.
+        // A real session now exists. Claim it right away — the one-id-specific
+        // guard that protects it from here on, now that the id is actually
+        // known, same as `startingAgents` did for the window before it.
         attemptedSessions.add(result.sessionId);
         // Self-healing for whatever gap remains: if some other task already points at
         // this exact session — the race above, caught too late, or a second window —
@@ -753,21 +753,28 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         // deleted from storage above — `tasks` was read before that delete settled.
         setTasks(tasks.filter((t) => t.id !== duplicate?.id).map((t) => (t.id === task.id ? updated : t)));
         render();
-        // The session was created, but `text` (the description) may not have
-        // reached it — `startSession` reports this itself; it is not something
-        // retrying from here can fix (there is no "send a message to an
-        // existing session" call), so the best this can do is tell you plainly. The description itself isn't lost: it's still right here on the task.
-        const deliveryIssue = describeStartSessionDelivery(result.sent);
-        if (deliveryIssue) {
-          void host.toast({
-            kind: 'error',
-            message: `Started the agent, but your description wasn't sent automatically — ${deliveryIssue}. It's still saved on the task; open the chat and paste it in.`,
-          }).catch(() => undefined);
-        }
         // The explicit navigation, deliberately deferred until everything above is
         // safely saved — see the comment on `navigation: 'preserve'` above.
-        await host.openSession(result.sessionId);
+        try {
+          await host.openSession(result.sessionId);
+        } catch (error) {
+          // The chat exists, is linked, and opens again from its card's
+          // detail: tell plainly and stop. Populating a composer that was
+          // never the new chat's would write the description into some
+          // other chat.
+          void host.toast({ kind: 'error', message: `Started the chat, but it could not be opened — ${describeHostError(error)}.` }).catch(() => undefined);
+          closeDetail();
+          return;
+        }
         closeDetail();
+        // The prompt: populate, never send — `prompt` with `send` omitted
+        // replace-composes on the current session (the one just opened) with
+        // the description on screen (else its title), waiting for the user's
+        // own send. Fire-and-forget: the page may be gone before it settles,
+        // and the text stays safe on the task either way.
+        void host.prompt({ text: chatPromptForTask({ title, description }) }).catch(() => {
+          void host.toast({ kind: 'info', message: `The chat was created but its composer wasn't filled — the description is still on the task "${title}".` }).catch(() => undefined);
+        });
       },
     });
   };
