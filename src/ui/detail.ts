@@ -51,6 +51,21 @@ const svgIcon = (path: string): SVGElement => {
   return node;
 };
 
+/**
+ * Wraps the SDK text field's textarea in a relative box an in-field control
+ * (the dictation mic) anchors to — the wrapper keeps the field's own frame,
+ * so the control sits inside it, not beside it. Returns null when the
+ * expected kit DOM is missing; the caller then mounts below the field.
+ */
+const wrapFieldTextarea = (host: HTMLElement): HTMLElement | null => {
+  const textarea = host.querySelector<HTMLTextAreaElement>('textarea.oc-sdk-input');
+  if (!textarea?.parentElement) return null;
+  const wrap = el('div', 'kb-field-float');
+  textarea.parentElement.insertBefore(wrap, textarea);
+  wrap.append(textarea);
+  return wrap;
+};
+
 /** Micro tone language for the "Or link an existing session" list badges — the
  *  same family the agent pills use, expressed in the kit's badge tones. */
 const SESSION_BADGES: Record<string, { label: string; tone: 'neutral' | 'info' | 'warning' | 'error' }> = {
@@ -209,17 +224,21 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   });
 
   // --- Voice dictation (microphone capability) ---
-  // Only rendered when the host offered the microphone feature at ready. The
-  // panel (OpenChamber's dictation look) holds all interaction: tap "Dictate"
-  // to record, ✓ stops the capture and transcribes fully locally; the
-  // recognized text is appended to the existing description with a single
-  // space (never the title), and the field keeps focus. Discard/Cancel drops
-  // the partial audio (or a running transcription) and closes the microphone.
-  // The controller is per board mount, the panel per dialog — release it here.
+  // Only rendered when the host offered the microphone feature at ready, and
+  // blended into the field, not beside it: the SDK textarea is wrapped in a
+  // relative box and the mic affordance lives inside the textarea's own frame
+  // — a ghost mic while idle, a control strip over the field's bottom edge
+  // while recording, OpenChamber-composer style. Tap the mic to record, ✓
+  // stops the capture and transcribes fully locally; the recognized text is
+  // appended to the existing description with a single space (never the
+  // title), and the field keeps focus. Discard/Cancel drops the partial audio
+  // (or a running transcription) and closes the microphone. The controller is
+  // per board mount, the panel per dialog — release it here.
+  const dictMount = props.dictation ? wrapFieldTextarea(descWrap) : null;
   let disposeDictationPanel: (() => void) | null = null;
   if (props.dictation) {
     const onToast = (message: string, kind: 'info' | 'error') => props.onToast?.(message, kind);
-    disposeDictationPanel = mountDictationPanel(descWrap, {
+    disposeDictationPanel = mountDictationPanel(dictMount ?? descWrap, {
       dictation: props.dictation,
       onText: (text) => {
         const dictated = text.trim();

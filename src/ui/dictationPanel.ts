@@ -1,9 +1,11 @@
-// The task dialog's dictation UI in OpenChamber's own look, under the
-// description field: a compact "Dictate" trigger with the app's mic icon, and
-// while a capture runs, a bordered panel with the status text, a pulsing red
-// dot, the same level-bar visualizer OpenChamber's composer renders while
-// listening, the duration, and small icon actions. Pure presentation — the
-// state machine, capture and service calls stay in src/host/dictation.ts.
+// The task dialog's dictation UI, blended into the description field the way
+// OpenChamber's composer blends its controls into the input: while idle a
+// lone ghost mic sits inside the textarea's bottom-right corner; while a
+// capture runs, a strip fades over the field's own bottom edge — a pulsing
+// red dot, the same level-bar visualizer OpenChamber's composer renders while
+// listening, the duration, and small icon actions (spinner + status while
+// transcribing). Pure presentation — the state machine, capture and service
+// calls stay in src/host/dictation.ts.
 import type { DictationController, DictationHandlers } from '../host/dictation.ts';
 import { el } from './dom.ts';
 
@@ -178,44 +180,55 @@ const iconButton = (path: string, label: string, primary = false): HTMLButtonEle
  * board's shared controller, so two dialogs open at once share one capture and
  * both panels track its state (only the active one owns real actions).
  */
-export const mountDictationPanel = (root: Element, props: DictationPanelProps): DictationPanel => {
+export const mountDictationPanel = (mount: Element, props: DictationPanelProps): DictationPanel => {
   const { dictation } = props;
-  const wrap = el('div', 'kb-dictation');
-  root.append(wrap);
+  // Inside the field's float box (detail.ts wraps the SDK textarea in one)
+  // the mic and the strip anchor to the frame's own corners; mounted anywhere
+  // else — the fallback when the kit's DOM ever drifts — they stack plainly
+  // below the field instead, the controls unchanged.
+  const floated = mount.classList.contains('kb-field-float');
+  const wrap = el('div', floated ? 'kb-dict' : 'kb-dict kb-dict-plain');
+  mount.append(wrap);
 
-  const trigger = el('button', 'kb-dict-trigger');
+  // Idle: a lone ghost mic inside the textarea's frame — tooltip and label
+  // carry the meaning, not a separate bordered button.
+  const trigger = el('button', 'kb-dict-inline');
   trigger.type = 'button';
   trigger.title = 'Dictate';
   trigger.setAttribute('aria-label', 'Dictate a description with the microphone');
-  trigger.append(svgIcon(MIC_PATH), document.createTextNode('Dictate'));
+  trigger.append(svgIcon(MIC_PATH));
   wrap.append(trigger);
 
-  const panel = el('div', 'kb-dict-panel');
-  panel.hidden = true;
-  wrap.append(panel);
-  const status = el('div', 'kb-dict-status');
-  const controls = el('div', 'kb-dict-controls');
-  panel.append(status, controls);
+  // Active: the strip over the field's own bottom edge, no card of its own.
+  const strip = el('div', 'kb-dict-strip');
+  strip.setAttribute('role', 'group');
+  strip.setAttribute('aria-label', 'Dictation');
+  strip.hidden = true;
+  wrap.append(strip);
 
   const meter = createMeter();
   const timer = el('span', 'kb-dict-timer');
   const dot = el('span', 'kb-dict-dot');
+  dot.setAttribute('aria-hidden', 'true');
   const spinner = el('span', 'kb-dict-spin');
+  spinner.setAttribute('aria-hidden', 'true');
+  const status = el('span', 'kb-dict-status');
 
   type Kind = 'idle' | 'recording' | 'transcribing';
   let kind: Kind = 'idle';
   let handlers: DictationHandlers | null = null;
 
-  /** Renders the control row for a kind; skipped while it stays the same. */
+  /** Renders the strip for a kind; skipped while it stays the same. */
   const renderKind = (next: Kind, seconds: number) => {
     if (kind === next) {
       if (next === 'recording') timer.textContent = formatSeconds(seconds);
       return;
     }
     kind = next;
-    controls.replaceChildren();
+    strip.replaceChildren();
     if (next === 'recording') {
-      status.textContent = 'Listening…';
+      // The pulsing dot says "listening", the bars carry the level — no
+      // status text needed while recording (the timer says the rest).
       timer.textContent = formatSeconds(seconds);
       const discardButton = iconButton(CLOSE_PATH, 'Discard');
       discardButton.addEventListener('click', () => dictation.discard());
@@ -223,21 +236,23 @@ export const mountDictationPanel = (root: Element, props: DictationPanelProps): 
       insertButton.addEventListener('click', () => { if (handlers) dictation.toggle(handlers); });
       const actions = el('span', 'kb-dict-actions');
       actions.append(discardButton, insertButton);
-      controls.append(dot, meter.canvas, timer, actions);
+      strip.append(dot, meter.canvas, timer, actions);
       meter.start();
     } else if (next === 'transcribing') {
       status.textContent = 'Transcribing…';
       const cancelButton = iconButton(CLOSE_PATH, 'Cancel');
       cancelButton.addEventListener('click', () => dictation.discard());
-      controls.append(spinner, cancelButton);
+      const actions = el('span', 'kb-dict-actions');
+      actions.append(cancelButton);
+      strip.append(spinner, status, actions);
       meter.stop();
     }
-    // `idle` leaves the panel hidden; nothing to build.
+    // `idle` leaves the strip hidden and the trigger showing; nothing to build.
   };
 
   const showIdle = () => {
     meter.stop();
-    panel.hidden = true;
+    strip.hidden = true;
     trigger.hidden = false;
     kind = 'idle';
   };
@@ -245,13 +260,13 @@ export const mountDictationPanel = (root: Element, props: DictationPanelProps): 
   const onView: DictationHandlers['onView'] = (view) => {
     if (view.state === 'recording') {
       trigger.hidden = true;
-      panel.hidden = false;
+      strip.hidden = false;
       renderKind('recording', view.seconds);
       return;
     }
     if (view.state === 'transcribing') {
       trigger.hidden = true;
-      panel.hidden = false;
+      strip.hidden = false;
       renderKind('transcribing', view.seconds);
       return;
     }
