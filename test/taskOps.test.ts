@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { HostClient, JsonValue } from '@openchamber/sdk';
 import { createTask, type Task } from '../src/domain/task.ts';
-import { loadTasks } from '../src/store/taskStore.ts';
+import { loadTasks, saveTask } from '../src/store/taskStore.ts';
 import { DISMISSED_SESSIONS_KEY, loadDismissedSessions } from '../src/store/dismissedSessions.ts';
 import {
   createBacklogTask,
   deleteTaskWithDismissal,
+  deleteTasksWithDismissal,
   patchTask,
   planMove,
   saveMove,
@@ -145,6 +146,77 @@ test('when the delete fails a fresh dismissal is rolled back', async () => {
   await assert.rejects(deleteTaskWithDismissal(host, t, dismissed));
   assert.equal(dismissed.has('ses_1'), false);
   assert.equal((await loadDismissedSessions(host)).has('ses_1'), false, 'storage rolled back too');
+});
+
+test('deleteTasksWithDismissal saves every fresh dismissal once, then deletes independently', async () => {
+  const { host } = fakeHost();
+  const dismissalSaves: string[] = [];
+  const wrapped: Pick<HostClient, 'storage'> = {
+    storage: {
+      get: (key) => host.storage.get(key),
+      set: async (key, value) => { dismissalSaves.push(key); await host.storage.set(key, value); },
+      delete: (key) => host.storage.delete(key),
+      keys: () => host.storage.keys(),
+    },
+  };
+  const a = task('a', 1, 'done', { sessionId: 's_a' });
+  const b = task('b', 2, 'done', { sessionId: 's_b' });
+  const plain = task('c', 3, 'done');
+  await saveTask(host, a);
+  await saveTask(host, b);
+  await saveTask(host, plain);
+  const dismissed = new Set<string>();
+  const { deletedIds, failed } = await deleteTasksWithDismissal(wrapped, [a, b, plain], dismissed);
+  assert.deepEqual(deletedIds.sort(), [a.id, b.id, plain.id].sort());
+  assert.deepEqual(failed, []);
+  assert.equal(dismissalSaves.filter((key) => key === DISMISSED_SESSIONS_KEY).length, 1, 'one dismissal save for the whole batch, before any delete');
+  assert.deepEqual([...(await loadDismissedSessions(host))].sort(), ['s_a', 's_b'], 'plain tasks never touch the list');
+  assert.equal(dismissed.has('s_a') && dismissed.has('s_b'), true);
+  assert.equal((await loadTasks(host)).tasks.length, 0);
+});
+
+test('deleteTasksWithDismissal isolates single failures within a batch', async () => {
+  const { host, failDeleteOn } = fakeHost();
+  const a = task('a', 1, 'done', { sessionId: 's_a' });
+  const b = task('b', 2, 'done', { sessionId: 's_b' });
+  await saveTask(host, a);
+  await saveTask(host, b);
+  failDeleteOn(new RegExp(`^task:${a.id.replace(/[^a-z0-9_]/g, '')}$`));
+  const dismissed = new Set<string>();
+  const { deletedIds, failed } = await deleteTasksWithDismissal(host, [a, b], dismissed);
+  assert.deepEqual(deletedIds, [b.id]);
+  assert.deepEqual(failed.map((t) => t.id), [a.id]);
+  const still = await loadDismissedSessions(host);
+  assert.equal(still.has('s_b'), true, 'what was deleted keeps its dismissal');
+  assert.equal(still.has('s_a'), false, 'what failed is un-dismissed again');
+  assert.equal(dismissed.has('s_a'), false, 'and so in memory');
+  const remaining = await loadTasks(host);
+  assert.equal(remaining.tasks.some((t) => t.id === a.id), true);
+  assert.equal(remaining.tasks.some((t) => t.id === b.id), false);
+});
+
+test('deleteTasksWithDismissal deletes nothing and rolls back when the dismissal save fails', async () => {
+  const { host, failSetOn } = fakeHost();
+  const a = task('a', 1, 'done', { sessionId: 's_a' });
+  const b = task('b', 2, 'done');
+  await saveTask(host, a);
+  await saveTask(host, b);
+  failSetOn(new RegExp(`^${DISMISSED_SESSIONS_KEY}$`));
+  const dismissed = new Set<string>();
+  await assert.rejects(deleteTasksWithDismissal(host, [a, b], dismissed));
+  assert.equal(dismissed.has('s_a'), false, 'rolled back in memory');
+  assert.equal((await loadTasks(host)).tasks.length, 2, 'nothing was deleted');
+});
+
+test('deleteTasksWithDismissal with no linked sessions touches nothing but the tasks', async () => {
+  const { host } = fakeHost();
+  const a = task('a', 1, 'done');
+  const dismissed = new Set<string>(['pre_existing']);
+  const { deletedIds, failed } = await deleteTasksWithDismissal(host, [a], dismissed);
+  assert.deepEqual(deletedIds, [a.id]);
+  assert.deepEqual(failed, []);
+  assert.equal(await storageHas(host, DISMISSED_SESSIONS_KEY), false, 'no dismissal save at all');
+  assert.deepEqual([...dismissed], ['pre_existing']);
 });
 
 /** `keys`-has helper, since callers hold the whole host slice, not the storage object. */

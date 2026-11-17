@@ -1,9 +1,9 @@
 import type { GuestProject, HostClient } from '@openchamber/sdk';
-import { mountBadge, mountBanner, mountButton, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
-import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
-import { ALL_PROJECTS, NO_PROJECT, rankAtEnd, type BoardFilter } from '../domain/board.ts';
+import { mountBadge, mountBanner, mountMenu, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
+import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
+import { ALL_PROJECTS, NO_PROJECT, planStatusMoves, rankAtEnd, type BoardFilter } from '../domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
-import { createBacklogTask, deleteTaskWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
+import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
 import { deleteTask, loadTasks, saveTask } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
@@ -107,6 +107,56 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   const clearBanner = () => { bannerSlot.hidden = true; };
   const notify = (error: unknown) => showBanner('Something went wrong', describeHostError(error));
 
+  /**
+   * The selection bar: visible only while tasks are selected (multi-select
+   * is board-page state; the rail panel passes no selection handlers and
+   * knows nothing of it). One row — count, Move-to menu, Mark Done, Delete —
+   * built once; the menu reads the live selection at click time, so it never
+   * needs re-mounting on selection changes.
+   */
+  const selected = new Set<string>();
+  let deleteArmed = false;
+  let emptyArmed: TaskStatus | null = null;
+  let emptyArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const selectionBar = el('div', 'kb-selectionbar');
+  selectionBar.hidden = true;
+  page.append(selectionBar);
+  const selectionCount = el('span', 'kb-selectionbar-count');
+  const moveMenuSlot = el('span', 'kb-selectionbar-move');
+  const markDoneButton = el('button', 'kb-bar-btn', 'Mark Done');
+  markDoneButton.type = 'button';
+  markDoneButton.dataset.tone = 'success';
+  markDoneButton.title = 'Move every selected task to Done';
+  const deleteButton = el('button', 'kb-bar-btn', 'Delete');
+  deleteButton.type = 'button';
+  deleteButton.dataset.tone = 'danger';
+  selectionBar.append(selectionCount, moveMenuSlot, markDoneButton, deleteButton);
+  const selectionMoveMenu = mountMenu(moveMenuSlot, {
+    label: 'Move to ⌄', variant: 'ghost', size: 'xs',
+    items: STATUSES.map((status) => ({ id: `move:${status}`, label: `Move to ${STATUS_LABELS[status]}` })),
+    onSelect: (menuId: string) => {
+      if (!menuId.startsWith('move:')) return;
+      const status = menuId.slice(5);
+      if ((STATUSES as readonly string[]).includes(status)) void moveSelectedTo(status as TaskStatus);
+    },
+  });
+  markDoneButton.addEventListener('click', () => { void moveSelectedTo('done'); });
+  deleteButton.addEventListener('click', () => {
+    const list = selectedTasks();
+    if (list.length === 0) return;
+    // The detail dialog's two-press destructive confirm, in bar form: the
+    // first press arms (label + destructive fill), the second deletes.
+    if (!deleteArmed) {
+      deleteArmed = true;
+      deleteButton.textContent = 'Click again to delete';
+      deleteButton.dataset.armed = 'true';
+      return;
+    }
+    resetDeleteButton();
+    void deleteTasksForIds(list);
+  });
+
   const columnsWrap = el('div'); page.append(columnsWrap);
   const spinnerSlot = el('div'); page.append(spinnerSlot);
 
@@ -128,6 +178,13 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     // deliberate Done — exactly the ⋯ menu's Move-to Done path: kept rank,
     // attention marker cleared, persisted with the shared rollback.
     onLooksDone: (task) => { void moveTaskByMenu(task, 'done'); },
+    // Multi-select lives in the page's own state; the renderer only asks.
+    onToggleSelect: (task) => { toggleSelect(task); },
+    isSelected: (task) => selected.has(task.id),
+    // The column head's Trash: first press arms, the second empties. Arming
+    // survives re-renders (this every-render rebuild re-asks the flag).
+    onEmptyColumn: (status) => { emptyColumn(status); },
+    isColumnEmptyArmed: (status) => emptyArmed === status,
     projectName: (task) => (task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? task.projectId : null),
   });
 
@@ -411,6 +468,125 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     void host.toast({ kind: 'info', message: `Deleted "${task.title}".` }).catch(() => undefined);
   };
 
+  // ---- Multi-select (page only): the selection bar, bulk move/delete, column cleanup ----
+
+  const selectedTasks = () => tasks.filter((task) => selected.has(task.id));
+
+  const toggleSelect = (task: Task) => {
+    if (selected.has(task.id)) selected.delete(task.id);
+    else selected.add(task.id);
+    render();
+  };
+
+  /**
+   * The bulk Move-to / Mark Done: one pure plan for the whole selection
+   * (the group appended at the target column's end in rank order, attention
+   * markers cleared, tasks already in the target left in place), then exactly
+   * the changed records saved. A failure anywhere falls back to a full
+   * reload — the same discipline a single move follows.
+   */
+  const moveSelectedTo = async (status: TaskStatus) => {
+    const planned = planStatusMoves(tasks, [...selected], status);
+    if (!planned) return;
+    setTasks(planned.next);
+    render();
+    try {
+      await Promise.all(planned.changed.map((task) => saveTask(host, task)));
+    } catch (error) {
+      notify(error);
+      void reload();
+    }
+  };
+
+  /**
+   * The one batch-delete path behind both the selection bar's Delete and a
+   * column head's emptied trash: the shared dismissal-first protocol, per-key
+   * isolation, one toast. Tasks whose delete failed stay on the board behind
+   * a warning; the failed ones can be retried once the cause is fixed.
+   */
+  const deleteTasksForIds = async (list: readonly Task[]) => {
+    try {
+      const { deletedIds, failed } = await deleteTasksWithDismissal(host, list, dismissedSessionIds);
+      const deleted = new Set(deletedIds);
+      if (deleted.size > 0) {
+        if (prefs.openTaskId && deleted.has(prefs.openTaskId)) closeDetail();
+        for (const id of deleted) selected.delete(id);
+        setTasks(tasks.filter((task) => !deleted.has(task.id)));
+        render();
+        const titles = list.filter((task) => deleted.has(task.id)).map((task) => task.title);
+        void host.toast({
+          kind: 'info',
+          message: titles.length === 1 ? `Deleted "${titles[0]}".` : `Deleted ${titles.length} tasks.`,
+        }).catch(() => undefined);
+      }
+      if (failed.length > 0) {
+        const unit = failed.length === 1 ? 'deletion did' : 'deletions did';
+        showBanner('Some tasks could not be deleted', `${failed.length} of ${list.length} ${unit} not go through. Refresh and try again.`, 'warning');
+      } else clearBanner();
+    } catch (error) { notify(error); }
+  };
+
+  /**
+   * The column trash's two-press confirm: the first press arms (the head
+   * button turns destructive, its tooltip becomes "Click again …"), with a
+   * short timeout so a stray tap never leaves a column primed for deletion.
+   * Arming lives across renders as this surface's state; the trash on an
+   * empty column never arms at all.
+   */
+  const disarmEmpty = () => {
+    emptyArmed = null;
+    if (emptyArmTimer !== null) { clearTimeout(emptyArmTimer); emptyArmTimer = null; }
+  };
+  const emptyColumn = (status: TaskStatus) => {
+    if (emptyArmed !== status) {
+      const shown = currentSections?.[status] ?? [];
+      if (shown.length === 0) return;
+      // Any arming from another column is cancelled here — the old timer
+      // belongs to the old status and must never clear this one's arming.
+      disarmEmpty();
+      emptyArmed = status;
+      render();
+      emptyArmTimer = setTimeout(() => {
+        emptyArmTimer = null;
+        if (emptyArmed !== null) { emptyArmed = null; render(); }
+      }, 3500);
+      return;
+    }
+    disarmEmpty();
+    const list = (currentSections?.[status] ?? []).map((item) => item.task);
+    if (list.length === 0) return;
+    void deleteTasksForIds(list);
+  };
+
+  const resetDeleteButton = () => {
+    deleteArmed = false;
+    deleteButton.textContent = 'Delete';
+    deleteButton.removeAttribute('data-armed');
+  };
+
+  const updateSelectionBar = () => {
+    const count = selected.size;
+    selectionBar.hidden = count === 0;
+    selectionCount.textContent = count === 1 ? '1 selected' : `${count} selected`;
+    if (count === 0) resetDeleteButton();
+  };
+
+  /**
+   * Escape drops the selection (and an armed column trash) — but only while
+   * no detail dialog is open: the dialog owns Escape first, being modal and
+   * trapping focus, so clearing waits for a second press there.
+   */
+  const onSelectionKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (detail) return;
+    if (selected.size === 0 && emptyArmed === null) return;
+    selected.clear();
+    resetDeleteButton();
+    disarmEmpty();
+    render();
+  };
+  document.addEventListener('keydown', onSelectionKeydown);
+
   const updateBadge = (sections: BoardSections) => {
     // The mounted badge describes what is on screen. The extension-tab rail
     // icon carries no number on purpose: the panel is display-only and no
@@ -445,6 +621,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   };
 
   const render = () => {
+    updateSelectionBar();
     const sections = buildBoardView(tasks, sessionSync.live(), filter);
     currentSections = sections;
     updateBadge(sections);
@@ -722,6 +899,12 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         orphanWatermark = watermark;
       }
       setTasks(loaded);
+      // A fresh load is the truth: selection entries whose task no longer
+      // exists (deleted elsewhere, or its record failed to load) drop out,
+      // and an armed column trash never survives a reload.
+      const loadedIds = new Set(loaded.map((task) => task.id));
+      for (const id of selected) if (!loadedIds.has(id)) selected.delete(id);
+      disarmEmpty();
       prefs = loadedPrefs;
       filter = { projectId: prefs.projectId };
       projectSelect.update({ value: filter.projectId, options: projectOptions() });
@@ -763,6 +946,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       orphanWatcher?.dispose();
       detail?.dispose();
       board.dispose();
+      selectionMoveMenu.dispose();
+      document.removeEventListener('keydown', onSelectionKeydown);
     },
   };
 };

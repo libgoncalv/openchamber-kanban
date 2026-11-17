@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPatch, createTask, newTaskId, parseTask, type Task } from '../src/domain/task.ts';
-import { planDrop, rankAtEnd } from '../src/domain/board.ts';
+import { planDrop, planStatusMoves, rankAtEnd } from '../src/domain/board.ts';
 
 const make = (title: string, extra: Partial<Task> = {}, rank = 1024): Task => ({
   ...createTask({ title }, rank, 1000, newTaskId(1000 + Math.floor(Math.random() * 1e6))),
@@ -83,4 +83,47 @@ test('rankAtEnd appends after the highest rank in that status', () => {
   const y = make('y', { rank: 50, status: 'backlog' });
   assert.equal(rankAtEnd([x, y], 'todo'), 10 + 1024);
   assert.equal(rankAtEnd([x, y], 'review'), 1024);
+});
+
+test('planStatusMoves appends the selection as a group at the target column end, in rank order', () => {
+  const a = make('a', { status: 'backlog', rank: 100 });
+  const b = make('b', { status: 'backlog', rank: 200 });
+  const m1 = make('m1', { status: 'review', rank: 5000, needsAttentionSince: 300 });
+  const m2 = make('m2', { status: 'review', rank: 6000, needsAttentionSince: 400 });
+  const plan = planStatusMoves([a, b, m1, m2], [m2.id, m1.id], 'backlog')!;
+  const ranks = new Map(plan.next.map((t) => [t.id, t.rank]));
+  // Group appended beyond the target column's max, mutual order byRank —
+  // not the id order the array happened to pass.
+  assert.equal(ranks.get(m1.id), 200 + 1024);
+  assert.equal(ranks.get(m2.id), 200 + 2048);
+  // Deliberate moves acknowledge: markers clear on everything that moved.
+  assert.equal(plan.next.find((t) => t.id === m1.id)?.needsAttentionSince, null);
+  assert.equal(plan.next.find((t) => t.id === m2.id)?.needsAttentionSince, null);
+  // The untouched neighbours never move: no rebalancing by design.
+  assert.equal(ranks.get(a.id), 100);
+  assert.equal(ranks.get(b.id), 200);
+  assert.deepEqual(plan.changed.map((t) => t.id).sort(), [m1.id, m2.id].sort());
+});
+
+test('planStatusMoves leaves a task already in the target in place, clearing only a stale marker', () => {
+  const inTarget = make('t', { status: 'done', rank: 10, needsAttentionSince: 500 });
+  const calm = make('c', { status: 'done', rank: 10 });
+  const moving = make('m', { status: 'todo', rank: 30 });
+  const plan = planStatusMoves([inTarget, calm, moving], [inTarget.id, calm.id, moving.id], 'done')!;
+  const byId = new Map(plan.next.map((t) => [t.id, t]));
+  assert.equal(byId.get(inTarget.id)?.needsAttentionSince, null, 'a repeat move still acknowledges');
+  assert.equal(byId.get(inTarget.id)?.rank, 10);
+  assert.equal(byId.get(calm.id)?.rank, 10, 'marker already clear: record untouched');
+  assert.deepEqual(plan.changed.map((t) => t.id).sort(), [inTarget.id, moving.id].sort());
+});
+
+test('planStatusMoves is null when nothing would change, and ignores unknown ids', () => {
+  const calm = make('c', { status: 'done', rank: 10 });
+  assert.equal(planStatusMoves([calm], [calm.id], 'done'), null);
+  assert.equal(planStatusMoves([calm], ['nope'], 'todo'), null);
+  assert.equal(planStatusMoves([calm], [], 'todo'), null);
+  // Unknown ids mixed with real ones: only the real ones act.
+  const plan = planStatusMoves([calm, make('x', { status: 'todo', rank: 20 })], ['nope', calm.id, calm.id], 'todo')!;
+  assert.deepEqual(plan.changed.map((t) => t.id), [calm.id]);
+  assert.equal(plan.next.find((t) => t.id === calm.id)?.rank, 20 + 1024);
 });

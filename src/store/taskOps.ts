@@ -6,8 +6,9 @@ import { saveDismissedSessions } from './dismissedSessions.ts';
 
 /**
  * The write operations behind the full-screen board page: quick-created
- * tasks, drag-and-drop moves, menu moves, status changes, and deletes.
- * Orderings and the save/rollback discipline live in exactly one place, so
+ * tasks, drag-and-drop moves, menu moves, status changes, and deletes —
+ * single-task and in batch (multi-select, column emptying). Orderings and
+ * the save/rollback discipline live in exactly one place, so
  * they can never diverge from what the rail panel merely displays. Callers
  * commit the returned arrays to their own state (`setTasks`) and render;
  * saves throw so the page can notify its own way and fall back to a reload.
@@ -118,4 +119,51 @@ export const deleteTaskWithDismissal = async (
     throw error;
   }
   return { dismissed };
+};
+
+/**
+ * The batch form of deleteTaskWithDismissal — multi-select deletes and the
+ * column-head "empty column" run through this. Every linked session among
+ * `tasks` that is not already dismissed joins the dismissed set, saved ONCE
+ * before the first task is deleted: the orphan watcher can never catch an
+ * adoptable session for even a moment between two per-task deletes. That save
+ * failing throws and rolls the additions back (memory plus nothing deleted),
+ * exactly like the single-task protocol.
+ *
+ * The deletes then run independently — one storage record per task means one
+ * failure keeps only its own task, not the batch. The sessions behind failed
+ * tasks are un-dismissed again (best-effort save, never thrown): a task that
+ * was not deleted keeps its session adoption-eligible the moment its link is
+ * gone, same as the single-task rollback. Callers get the split (`deletedIds`,
+ * `failed`) and handle notify/reload in their own voice.
+ */
+export const deleteTasksWithDismissal = async (
+  host: Storage,
+  tasks: readonly Task[],
+  dismissedSessionIds: Set<string>,
+): Promise<{ deletedIds: string[]; failed: Task[] }> => {
+  const fresh = tasks.flatMap((task) => (task.sessionId && !dismissedSessionIds.has(task.sessionId) ? [task.sessionId] : []));
+  if (fresh.length > 0) {
+    for (const id of fresh) dismissedSessionIds.add(id);
+    try {
+      await saveDismissedSessions(host, dismissedSessionIds);
+    } catch (error) {
+      for (const id of fresh) dismissedSessionIds.delete(id);
+      throw error;
+    }
+  }
+  const results = await Promise.allSettled(tasks.map((task) => deleteTask(host, task.id)));
+  const deletedIds: string[] = [];
+  const failed: Task[] = [];
+  results.forEach((result, index) => {
+    const task = tasks[index]!;
+    if (result.status === 'fulfilled') deletedIds.push(task.id);
+    else failed.push(task);
+  });
+  if (failed.length > 0) {
+    const keepEligible = failed.flatMap((task) => (task.sessionId ? [task.sessionId] : []));
+    for (const id of keepEligible) dismissedSessionIds.delete(id);
+    void saveDismissedSessions(host, dismissedSessionIds).catch(() => undefined);
+  }
+  return { deletedIds, failed };
 };

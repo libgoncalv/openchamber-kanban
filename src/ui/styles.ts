@@ -5,10 +5,26 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-page{display:flex;flex-direction:column;gap:14px;padding:16px;min-height:100%}
 .kb-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .kb-toolbar .grow{flex:1;min-width:160px}
+/* The selection bar (page only): appears under the toolbar while tasks are
+   selected — a count, a Move-to menu, Mark Done, and the Delete that needs
+   its second, confirming press. Plain buttons in the status-strip idiom. */
+.kb-selectionbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:var(--oc-radius,10px)}
+.kb-selectionbar-count{font-weight:600;font-size:13px}
+.kb-bar-btn{min-height:30px;padding:5px 12px;font:inherit;font-size:12.5px;font-weight:550;color:var(--oc-fg);background:transparent;border:1px solid var(--oc-border);border-radius:calc(var(--oc-radius,10px) - 3px);cursor:pointer}
+.kb-bar-btn:hover{background:var(--oc-hover)}
+.kb-bar-btn:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+.kb-bar-btn[data-tone="success"]{color:var(--oc-success-text,var(--oc-success,#46a758));border-color:color-mix(in srgb,var(--oc-success,#46a758) 40%,transparent)}
+.kb-bar-btn[data-tone="success"]:hover{background:color-mix(in srgb,var(--oc-success,#46a758) 12%,transparent)}
+.kb-bar-btn[data-tone="danger"]{color:var(--oc-error-text,var(--oc-error,#e5484d));border-color:color-mix(in srgb,var(--oc-error,#e5484d) 40%,transparent)}
+.kb-bar-btn[data-tone="danger"]:hover{background:color-mix(in srgb,var(--oc-error,#e5484d) 12%,transparent)}
+/* Armed destructive: filled — the second press must look like what it is. */
+.kb-bar-btn[data-armed="true"]{background:var(--oc-error,var(--status-error,#e5484d));border-color:transparent;color:#fff}
+.kb-bar-btn[data-armed="true"]:hover{background:var(--oc-error,var(--status-error,#e5484d));color:#fff}
 .kb-columns{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding-bottom:8px;flex:1}
 .kb-column{flex:1 0 220px;min-width:220px;max-width:320px;display:flex;flex-direction:column;background:var(--oc-muted-surface);border:1px solid var(--oc-border);border-radius:var(--oc-radius,10px);min-height:120px;overflow:hidden}
 .kb-column.kb-dragover{outline:2px solid var(--oc-focus);outline-offset:-2px}
 .kb-column-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--oc-border)}
+.kb-column-tools{display:flex;align-items:center;gap:8px;flex:none}
 .kb-column-title{font-weight:600;font-size:12px;letter-spacing:.02em;text-transform:uppercase;color:var(--oc-muted)}
 .kb-column-count{font:11px var(--oc-mono);color:var(--oc-muted)}
 .kb-column-body{display:flex;flex-direction:column;gap:8px;padding:10px;overflow-y:auto;flex:1;min-height:40px}
@@ -19,6 +35,10 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-card.kb-dragging{opacity:.4}
 .kb-card.kb-attn{border-color:var(--oc-warning);border-left-width:3px}
 .kb-card.kb-attn:hover{border-color:var(--oc-warning)}
+/* A selected card wears the focus-colored outline ring — not the border — so
+   an attention card keeps its warning edge visible beside the selection. */
+.kb-card[data-selected="true"]{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+.kb-check{width:15px;height:15px;margin:1px 0 0;accent-color:var(--oc-primary);cursor:pointer;flex:none}
 .kb-card-title{font-weight:550;font-size:13px;overflow-wrap:anywhere}
 .kb-card-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 /* The shared item head: title left, ⋯ menu right — same on cards and rows. */
@@ -170,6 +190,8 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
   .kb-panel-menu{opacity:1}
   /* Touch has no hover: the page card's quiet ✓ is a button always, not only on reveal. */
   .kb-card .kb-iconbtn[data-quiet="true"]{opacity:1}
+  /* The selection checkbox reaches a tappable size under a finger. */
+  .kb-check{width:20px;height:20px}
 }
 /* Small square icon buttons — the ✓ beside the ⋯ menu on page cards and the
    rail's mark-done ✓ — reusing the dictation panel's icon-button idiom.
@@ -196,6 +218,10 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-tb-iconbtn svg{width:14px;height:14px;display:block}
 .kb-tb-iconbtn.kb-spinning svg{animation:kb-spin .9s linear infinite;transform-origin:center}
 .kb-tb-iconbtn[data-busy="true"]{opacity:.55;cursor:default}
+/* An armed destructive icon button (the column head's trash after its first
+   press) turns error-tinted — the second press empties the whole column. */
+.kb-iconbtn[data-armed="true"]{color:var(--oc-error-text,var(--oc-error,#e5484d));border-color:color-mix(in srgb,var(--oc-error,#e5484d) 45%,transparent);background:color-mix(in srgb,var(--oc-error,#e5484d) 12%,transparent)}
+.kb-iconbtn[data-armed="true"]:hover{background:color-mix(in srgb,var(--oc-error,#e5484d) 20%,transparent)}
 .kb-card .kb-iconbtn[data-quiet="true"]{opacity:0;transition:opacity 120ms ease-out}
 .kb-card:hover .kb-iconbtn[data-quiet="true"],.kb-card:focus-within .kb-iconbtn[data-quiet="true"]{opacity:1}
 .kb-panel-actions{display:flex;gap:6px;align-items:center;flex:none}

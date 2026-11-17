@@ -11,10 +11,10 @@ import { el } from './dom.ts';
  * `page` mode: five columns side by side, cards, a tap opens the task's
  * detail view. The rail panel mounts it in `rail` mode: the same five views
  * stacked as sections, slim rows. Every interactive affordance — the primary
- * tap, the ✓ mark-done shortcut, the ⋯ menu, dragging, folding, quick
- * actions — renders only when the surface supplies the matching handler, so
- * a surface that passes none (the rail: a pure display mirror) renders the
- * identical layout with nothing to click.
+ * tap, the ✓ mark-done shortcut, the ⋯ menu, dragging, folding, selection,
+ * column cleanup — renders only when the surface supplies the matching
+ * handler, so a surface that passes none (the rail: a pure display mirror)
+ * renders the identical layout with nothing to click.
  * Everything the two surfaces must never disagree on lives here: the item
  * body (title, project line, agent pill), the ⋯ menu
  * structure, the drop math, keyboard activation, and the attention flag.
@@ -45,6 +45,14 @@ export type KanbanHandlers = {
    * state as a display-only chip instead, and writes Done through `onMarkDone`.
    */
   onLooksDone?: (task: Task) => void;
+  /** Toggling one card's selection (checkbox click, or Ctrl/⌘-click on the card body). Absent — no checkbox renders and the card never selects. */
+  onToggleSelect?: (task: Task) => void;
+  /** Whether the card's checkbox is checked; the selection state lives in the surface. Absent — nothing renders selected. */
+  isSelected?: (task: Task) => boolean;
+  /** Page columns only: the head's trash icon empties that column (first press arms it, second deletes). Absent — no trash button. */
+  onEmptyColumn?: (status: TaskStatus) => void;
+  /** Whether the head trash for this status is armed — the arming state and its timeout live in the surface. */
+  isColumnEmptyArmed?: (status: TaskStatus) => boolean;
   /** The project's display name to show on a row, or null to show none (the rail in scoped mode). */
   projectName: (task: Task) => string | null;
   /** Only when a surface folds its sections: whether one starts folded, and toggling it. */
@@ -60,11 +68,14 @@ export type KanbanView = {
 /**
  * The icon set for the small square buttons (the same 24-viewBox style the
  * dictation panel uses — `.kb-dict-iconbtn`'s idiom, reused by `.kb-iconbtn`):
- * a check for "mark done" and a speech bubble for "open chat".
+ * a check for "mark done", a speech bubble for "open chat", and a trash can
+ * for the column head's "empty column".
  */
 const CHECK_DONE_PATH = 'M10 15.172l9.192-9.193 1.415 1.414L10 18l-6.364-6.364 1.414-1.414z';
 const CHAT_PATH =
   'M20 2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4l4 4 3-4h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z';
+const TRASH_PATH =
+  'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z';
 const svgGlyph = (path: string): SVGElement => {
   const node = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   node.setAttribute('viewBox', '0 0 24 24');
@@ -176,10 +187,31 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
       item_.draggable = false;
     }
     item_.dataset.id = task.id;
+    // Selection state the surface owns, read fresh on every render: the
+    // checkbox is the touch-safe primary idiom (always visible), Ctrl/⌘-click
+    // on the card body the desktop shortcut. Nothing renders on a surface
+    // that passes no selection handlers — the rail stays a plain mirror.
+    const selected = handlers.isSelected?.(task) ?? false;
+    if (selected) item_.dataset.selected = 'true';
 
     const main = el('div', 'kb-panel-main');
     item_.append(main);
     const top = el('div', 'kb-item-top');
+    if (handlers.onToggleSelect) {
+      const onToggle = handlers.onToggleSelect;
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'kb-check';
+      checkbox.checked = selected;
+      const verb = selected ? 'Deselect' : 'Select';
+      checkbox.title = `${verb} "${task.title}"`;
+      checkbox.setAttribute('aria-label', `${verb} task: ${task.title}`);
+      // A checkbox press is the checkbox's: never item activation.
+      // Toggling is read off the change event, where the native state is final.
+      checkbox.addEventListener('click', (event) => event.stopPropagation());
+      checkbox.addEventListener('change', () => onToggle(task));
+      top.append(checkbox);
+    }
     top.append(el('div', 'kb-panel-title', task.title));
     main.append(top);
 
@@ -267,6 +299,13 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
       // the menu's to handle, never item navigation.
       item_.addEventListener('click', (event) => {
         if ((event.target as HTMLElement)?.closest('.kb-panel-menu')) return;
+        // Ctrl/⌘-click is the desktop shortcut for the checkbox: it toggles
+        // the selection instead of opening the task, exactly when a selection
+        // handler exists.
+        if (handlers.onToggleSelect && (event.metaKey || event.ctrlKey)) {
+          handlers.onToggleSelect(task);
+          return;
+        }
         activate();
       });
       item_.tabIndex = 0;
@@ -290,10 +329,26 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     const column = el('div', 'kb-column');
     column.dataset.status = status;
     const head = el('div', 'kb-column-head');
-    head.append(el('span', 'kb-column-title', STATUS_LABELS[status]));
     const count = el('span', 'kb-column-count', String(items.length));
     if (items.some((entry) => entry.attention && entry.displayStatus !== 'done')) count.dataset.attn = 'true';
-    head.append(count);
+    // The tools group keeps the head reading title left, actions right: the
+    // count pill and, when the surface handles it, the column's trash. The
+    // arming state (first press of the two-press confirm) lives in the
+    // surface, so the flag survives this every-render rebuild.
+    const tools = el('span', 'kb-column-tools');
+    tools.append(count);
+    if (handlers.onEmptyColumn) {
+      const onEmpty = handlers.onEmptyColumn;
+      const armed = handlers.isColumnEmptyArmed?.(status) ?? false;
+      const trash = iconButton(
+        TRASH_PATH,
+        armed ? `Click again to empty ${STATUS_LABELS[status]}` : `Empty ${STATUS_LABELS[status]}`,
+        () => onEmpty(status),
+      );
+      if (armed) trash.dataset.armed = 'true';
+      tools.append(trash);
+    }
+    head.append(el('span', 'kb-column-title', STATUS_LABELS[status]), tools);
     const body = el('div', 'kb-column-body');
     column.append(head, body);
     if (items.length === 0) body.append(el('div', 'kb-column-empty', 'No tasks'));
