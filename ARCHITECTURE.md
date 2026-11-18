@@ -15,7 +15,7 @@ Requires OpenChamber `>=1.24.0` — the Extensions SDK (`Settings → Extensions
       "panel": { "id": "kanban-board", "name": "Kanban", "icon": "task", "entry": "panel/frame.html", "mobile": true },
       "page": { "entry": "panel/page.html", "title": "Kanban board", "mobile": true },
       "capabilities": ["sessions", "prompt", "microphone"],
-      "service": { "entry": "service/main.js", "runtime": "host", "permissions": { "exec": ["git"] } }
+      "service": { "entry": "service/main.js", "runtime": "host", "keepRunning": true, "permissions": { "exec": ["git"] } }
     }
   }
 }
@@ -46,6 +46,7 @@ openchamber-kanban/
       unlink.ts            # link health: whether a linked session/worktree provably still exists — pure
       autoTask.ts          # orphan-session eligibility + initial status + title — pure
       chatLink.ts        # the rail's chat button: the startSession request for a task, the link patch its success writes, and the composer-fill text (extension id + chip url) — pure
+      agentChannel.ts      # the agent channel's wire model: journal entry + mirror parsing, directory→project mapping, mirror cutting for the request-body cap, and the pure board-apply plan — pure
     store/
       taskStore.ts      # one host.storage key per task: task:<id>
       taskOps.ts          # the write ops the full-screen page runs: moves (planMove/saveMove/statusMove), bulk moves (planStatusMoves in domain/board.ts), createBacklogTask, patches, deletes (single + batch, the dismissal-before-delete protocol) — pure + storage only
@@ -53,6 +54,7 @@ openchamber-kanban/
       orphanWatermark.ts    # "going forward" cutoff timestamp: host.storage key "orphan-watermark"
     host/
       workspace.ts      # host.listProjects/onProjects/onSessions/onWorktrees/openSession wrappers
+      agentChannel.ts       # the board's side of the agent channel: mirror push, journal pull + ack — best-effort, null on any service failure
       sessionSync.ts      # live onSessions watcher → status sync (page) + the live map both surfaces display from
       worktreeSync.ts       # live onWorktrees watcher → worktree-deleted unlinks
       orphanSessions.ts     # live onProjects+onSessions watcher → sessions with no task yet
@@ -74,9 +76,13 @@ openchamber-kanban/
     frame.ts              # the adaptive panel entry behind the rail icon (contributes.panel): mounts the mirror or the page's board factory by width + device (viewModeFor), swapping live on the host's resize
     service/
       main.ts           # bootstrap: env, server, git + real recognizer (Node, not browser)
-      server.ts         # the loopback HTTP surface: auth, body read, route dispatch
+      server.ts         # the loopback HTTP surface: auth (host token + agent token), body read, route dispatch
+      agentStore.ts       # the channel's persistent state: mirror.json + journal.jsonl, atomic writes, serialized rewrites
+      agentRoutes.ts        # the agent channel routes: scope split (host vs agent token), create/note queueing, pending/ack
       transcribe.ts       # dictation routes: begin/append/finish/cancel + one-shot, clip store
       recognizer.ts       # lazy sherpa-onnx-node singleton for the local Parakeet model
+  skill/
+    kanban/SKILL.md       # the agent-facing instructions (routes, discovery, etiquette) — installed into the user's OpenCode skills dir
   panel/
     index.html, frame.html, page.html   # HTML shells
     main.js, frame.js, page.js          # esbuild IIFE output
@@ -105,6 +111,7 @@ type Task = {
   createdAt: number;
   updatedAt: number;
   needsAttentionSince: number | null;  // set when the Review marker/sort should treat this as unseen
+  agentNotes?: AgentNote[];            // notes agents left through the agent channel ({ at, text } each); absent on tasks that never received one
 };
 ```
 
@@ -213,6 +220,62 @@ Declared via `contributes.service` with `permissions.exec: ["git"]` — the only
 - The branch route runs **exactly one command**: `git -C <directory> for-each-ref --sort=-committerdate --count=200 --format=%(refname) refs/heads refs/remotes` — read-only, most-recently-active branches first, capped at 200, for a project directory the panel already knows about (`path.isAbsolute` checked).
 - `src/host/branchService.ts` (`fetchServiceBranches`) is best-effort: not approved, not running, a bad answer, or any other error all become `null`, never an exception the UI has to handle, because the worktree-derived fallback was a complete, working option on its own. Unused by the UI today; kept only with the still-declared route and permission.
 
+## The agent channel (agents read the board, queue tasks and notes)
+
+An OpenCode session in one of the board's projects can talk to the board through the extension's own local service. The design's one non-negotiable: **the board page is the only writer of task records** — the service has no `host.storage` access (nothing in the SDK grants it), and the page is often closed. So every agent write is *queued*, never applied, and the channel is a two-way sync with the page:
+
+```
+agent --HTTP(loopback, agent token)--> service --journal--> [board page loads] --> host.storage
+   ^                                      ^
+   |                mirror.json <--PUT-- board page (debounced after every write)
+   read GET /agent/tasks
+```
+
+Pure wire model in `src/domain/agentChannel.ts`; the service side stores it in `src/service/agentStore.ts` and serves it in `src/service/agentRoutes.ts`; the board's best-effort client is `src/host/agentChannel.ts`.
+
+### Two tokens, one surface
+
+`server.ts` now authenticates two bearer tokens on the same loopback listener:
+
+| Token | Held by | Reaches |
+|---|---|---|
+| `OPENCHAMBER_SERVICE_TOKEN` (host's) | the host proxy only | everything, as before — `/branches`, `/transcribe*`, **and** the channel's sync routes |
+| the channel's agent token | whatever the user's own processes can read | `GET /agent/tasks`, `POST /agent/tasks`, `POST /agent/tasks/:id/note` — nothing else |
+
+The agent token is minted once per install (32 random bytes, `agent-token` in the service data dir, mode 0600) and advertised in `agent.json` (`{ v, port, token, pid }`, mode 0600, temp-file + rename on every spawn, **removed on SIGTERM/SIGINT** so a clean stop never advertises a dead port; a crash leaves a stale port that answers only `ECONNREFUSED`). The trust line is stated plainly in the README: any process running as the user can read the token, which is exactly the trust every agent session already has on this machine — the SDK's own "least exposure, not a sandbox" stance applied to a local file.
+
+The scope split lives in the route handler, not in the server: an agent token on `/agent/pending`, `/agent/pending/ack`, or `/agent/mirror` answers 403, and on the historical routes (`/branches`, `/transcribe*`) the whole subtree answers 403 — the agent token must never reach git or dictation. The sync routes accept the host token only; **an agent can neither read the journal nor acknowledge it**, so it can never erase what the board has not yet applied.
+
+### The mirror (reads)
+
+The board pushes a mirror document — tasks as `AgentTaskView`s plus the project list (`id`, `name`, `directory`) — debounced 500 ms after every `setTasks`, skipped while the live project list is empty (a map-less mirror is worth less than none; the next change, load, or event re-tries), and best-effort throughout: `serviceRequest` failures are silent, because the service may be unapproved, paused, or mid-restart (it now runs with `keepRunning: true`, so it holds while OpenChamber runs).
+
+`buildMirrorDoc` is where the 64 000-character `serviceRequest` body cap meets a real board: it cuts in measured, declarative steps — full descriptions; descriptions clamped at 1500; at 400; descriptions empty; tasks capped to the 60 most-recently-updated with notes dropped — each step applied cumulatively, tasks ordered oldest-first so the over-cap truncation drops the *oldest* rows, newest work always represented. A mirror smaller than the truth is honest about exactly that (the skill says descriptions in listings are summaries); it never lies about existence or status.
+
+The route `GET /agent/tasks` serves the pushed document as it parses; no per-task route exists (the mirror is the summary by design).
+
+### The journal (writes)
+
+`POST /agent/tasks` and `POST /agent/tasks/:id/note` validate the request the `parseTask` way (throw with a human reason, so the agent's tool result says what to fix — a description is refused, not silently clamped), map `directory` → `projectId` against the mirror via `resolveDirectoryToProject` (exact match, else the longest registered directory that prefixes it on a path boundary — `/record` never matches `/repo`), and append a journal entry (`journal.jsonl`, entry ids `a_<16 hex>` so corrupt lines are skippable individually and acks are id-precise). The answer is a receipt — **queued, not created** — with the resolved project named and, when a directory matched nothing, a `warning` that says the task will land unplaced. A journal at `AGENT_JOURNAL_MAX` (200) answers **429** naming the catch-up step instead of losing the write. Every accepted append fires `emit('kanban-agent-change', { pendingCount })` through `createServiceHost` — open board frames re-pull live; frames that are closed hear nothing replayed, which is why the journal is on disk, not in memory.
+
+### The board applies
+
+`reload()` runs `applyAgentPending()` after link reconciliation and before the orphan watcher (the same ordering discipline: what lands here saves through the same task records the adoption reader walks, and pending creates are never orphans). The pull → `planPendingApply` (pure) → per-entry independent saves → ack only what landed:
+
+- **Creates** become real tasks through `createTask` with `rankAtEnd(tasks, status)` — the same end-of-column landing a quick-created task gets; status limited to `backlog`/`todo` at the wire. The entry's service-time `projectId` is used only when that project still exists; otherwise the *board's* live project list re-resolves the directory (fresher than the mirror), else `null` — unplaced, never misplaced. Ids are board-minted (`newTaskId`), plan-time; a note arriving for a task is folded by task so five notes in one journal are one save.
+- **Notes** land on `task.agentNotes` (cap: `AGENT_NOTES_MAX` = 20 per task, oldest give way; `AGENT_NOTE_MAX` = 2000 chars each, `appendAgentNote` clamps the way dictation does). The detail dialog renders them newest-first under "Agent notes".
+- **Acks** remove only the applied/dropped ids from the file; a save failure leaves its entry pending and the next pull (next load, next event, next Refresh — the banner says so) retries it. A replayed create would be a duplicate card, so a *failed ack* is treated as a failed apply: the board reloads from storage rather than guessing which ids stuck.
+
+Toasts follow the board's voice (`From an agent: added "…" (Backlog), an agent left a note on "…".`), and applying is guarded by one in-flight flag — the event-driven pull and the load-driven one never interleave.
+
+### What the channel cannot do
+
+By design, and enforced in three places (route surface, wire validation, board apply):
+
+- No deletes. No status moves. No Done. Statuses belong to the linked session's own activity (`statusForSession`), and Done is the user's click everywhere on this board — the mirror has no write path for any of it.
+- Notes are additive and capped; the agent token cannot read or ack the journal; the mirror accepts only the board's push.
+- No session correlation arrives with an agent's HTTP call (routes are curl-level), so notes are not attributed to a session — an MCP wrapper (`ai.opencode/sessionID` arrives in tool-call metadata for free) is the natural later addition, which is why the routes were kept plain.
+
 ## Voice dictation (description field)
 
 A **🎙 Dictate** button sits under the description textarea in the task detail dialog. It is rendered only when the host offers the microphone (`ready.features.microphone` from the `microphone` grant); everywhere else it does not exist, and the documented fallback — particularly in the native mobile app — is the operating system keyboard's own dictation.
@@ -269,7 +332,7 @@ npm install
 npm run check   # typecheck + unit tests + build panel/main.js, panel/page.js, service/main.js
 ```
 
-In OpenChamber: **Settings → Extensions → Add** → paste this folder's absolute path → approve `sessions`, `prompt`, `microphone`, and the local service → open **Kanban** either beside a chat (the rail icon: the quick-actions mirror at rail width, the interactive board once the panel is expanded — desktop) or as the full-screen page from the Extension pages menu above the session list. The mic button appears in a task's detail dialog only where the host actually offers the microphone (desktop/web with SDK 2.7.x); on mobile the fallback is the OS keyboard's dictation.
+In OpenChamber: **Settings → Extensions → Add** → paste this folder's absolute path → approve `sessions`, `prompt`, `microphone`, and the local service → open **Kanban** either beside a chat (the rail icon: the quick-actions mirror at rail width, the interactive board once the panel is expanded — desktop) or as the full-screen page from the Extension pages menu above the session list. The mic button appears in a task's detail dialog only where the host actually offers the microphone (desktop/web with SDK 2.7.x); on mobile the fallback is the OS keyboard's dictation. Updating from an older version asks to re-approve once — the service now announces it **keeps running** (that is what makes the agent channel reachable whenever an agent runs), and OpenChamber re-asks whenever a package asks for more than before.
 
 Acceptance scenarios:
 
@@ -284,6 +347,8 @@ Acceptance scenarios:
 9. Open a task's detail dialog on desktop → 🎙 Dictate → speak a sentence → Stop and insert → the sentence appears at the end of the description (title untouched), the red microphone indicator disappears the moment you stop, and a second dialog with the mic button already off starts no capture.
 10. An agent finishes a turn → the task lands in Review; after ~10 minutes of the session staying idle and `completed` with no new turn, the Review card shows the success-tinted ✓ with a tooltip naming the quiet time; opening the card turns the ✓ muted (hover to see it); clicking it marks the task Done — still never automatically.
 11. Check two cards (or Ctrl/⌘-click them) → the selection bar shows "2 selected"; Move to a column keeps their relative order at the target's end, Mark Done sends both to Done, and Delete — after a second, confirming press — removes both and dismisses their linked sessions from adoption. Escape clears the selection; the rail panel shows no checkbox, bar, or trash anywhere.
+12. Open the board once (the mirror is pushed), then from a terminal read the agent token in the service data dir, `GET /agent/tasks` (tasks listed), `POST /agent/tasks` with the repo's directory (receipt says `queued`, project named), close the board, reopen → the card lands at the end of Backlog with a "From an agent …" toast; `POST /agent/tasks/:id/note` on its id, reopen → "Agent notes" in the detail dialog shows it, newest first.
+13. With the agent token: `/branches` and `/transcribe/cancel` answer 403; `/agent/pending`, `/agent/pending/ack`, and `/agent/mirror` answer 403. With no or a wrong token: 401 everywhere but `/health`. After `SIGTERM`, the data dir's `agent.json` is gone.
 12. First press of a column's head trash arms it ("Click again to empty"); the second deletes exactly that column's visible tasks and toasts the count. Left alone, the armed state resets itself after a few seconds; the trash on an empty column never arms.
 13. In the rail, click a linked card's chat bubble → the chat opens, and an orange border on the row clears with it (the marker was the review flag).
 14. In the rail, click the plus-cut chat glyph on an unlinked card → a chat is created attached to the card, opened, and its composer is pre-filled with the card's description — nothing is sent until you press send, and the card does not change columns.

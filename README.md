@@ -19,6 +19,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 - Delete a session in the OpenChamber sidebar — the linked task is deleted automatically. Archive a session, or delete a worktree — the corresponding link is cleared and the task stays on the board. You can start a new agent for it, or link another session.
 - Move a task to any column three ways: drag the card, the ⋯ menu on it, or open the task and click the status you want in its Status strip. One click for every column, and the click moves immediately — the same deliberate move the other two make. The ⋯ menu exists on every card on the page.
 - Each column carries its theme accent — gray Backlog, a held-back blue To Do, the same blue at full strength In Progress, amber Review, green Done — as a small strip above the header and the count's tint. The blue family is one color at two strengths (planned vs working); the color is display language on the column head only: cards keep their own (the agent pill, the amber unseen border).
+- The board also speaks **to agents**: an agent session in one of the board's projects can read the tasks and queue two things — a new task (Backlog or To Do) and a **note** on a task it worked on. See "The agent channel" below.
 
 
 
@@ -81,6 +82,26 @@ If you start a chat in OpenChamber another way — for example, from the sidebar
    Kanban Board  (the task shows the new status, for example Review)
 ```
 
+### The agent channel — how an agent reads and feeds the board
+
+An agent session (an OpenCode chat running in one of the board's projects) can talk to this board through the extension's local service. It can do exactly three things:
+
+- **List tasks** — `GET /agent/tasks` returns the board as a summary: each task's title, description, status, and project.
+- **Queue a task** — `POST /agent/tasks` with a title, a description, and (recommended) the working directory, which places the task in that project. It lands in Backlog or To Do when the board next applies it — the board page applies queued work on every load (and, while the board is open, within seconds).
+- **Leave a note** — `POST /agent/tasks/<id>/note` puts a text on a task, shown in the task detail's "Agent notes" section. This is the intended **wrap-up report**: what the agent did, which files changed, how to verify.
+
+That is all. There is deliberately no way for an agent to delete, to move a card, or to mark anything **Done** — statuses follow the linked session's state on their own, and Done stays a human decision everywhere on this board. Queued changes wait in a journal on disk (the board page is the only writer of task records and is often closed); acknowledging the journal is the board's job and the agent's token cannot reach it.
+
+Agents learn about the channel from the **skill**: install it once with
+
+```bash
+node scripts/install-skill.mjs
+```
+
+which copies `skill/kanban` into `~/.config/opencode/skills/kanban/`, so every OpenCode session — OpenChamber's included — can load it. The skill carries the routes, the discovery (the endpoint and its token are in the extension's data dir, in `agent.json`), and the etiquette above. The agent-side surface is the skill by design — no MCP registration — but the routes are plain HTTP, so a future MCP wrapper can sit on them unchanged.
+
+The service's data dir also holds the mirror (the task summary the board pushes for agents to read) and the journal (queued agent writes). Both live only on your machine. Installing the skill is optional: the board works the same without it.
+
 ## Install
 
 **1. Get the code.**
@@ -111,6 +132,7 @@ npm run check
   - **Run a local service** — see "What the local service does" below. This is the only reason this permission exists.
 - Click **Allow and enable**.
 - Open **Kanban** from the Extension pages menu, above your session list.
+- *(Optional)* Install the agent skill so OpenCode sessions can use the board: `node scripts/install-skill.mjs`. See "The agent channel" below.
 
 **Requirement:** OpenChamber version 1.24.0 or newer. Older versions do not have the Extensions feature at all.
 
@@ -119,7 +141,8 @@ npm run check
 The approval screen calls this "Run a local service" and says it runs with your full user access. That sounds broad, so here is exactly what it does:
 
 - It carries the board's **dictation**: when you dictate a description with the microphone, the audio goes to this service and is transcribed on your own computer — your voice never leaves your machine, and nothing connects to the internet on its own.
-- It runs **one command only**: `git for-each-ref`, which **reads** your repository's branch names. It only runs for a project directory already in your OpenChamber project list — never any other folder. The board itself no longer asks for that list: **Start Agent** now always runs in the project's main folder, so there is no branch to pick anymore — the command exists only because the route is still declared from an older version of this dialog.
+- It runs **one command only**: `git for-each-ref`, which **reads** your repository's branch names. The service-side check is thin on purpose — an absolute path — and the real restriction lives where the call comes from: this route is reachable **only through the host's authenticated proxy** with the extension's own token (an agent's channel token is refused with 403), and the board only ever sends a directory from your registered project list. Nothing on this machine that you didn't grant can reach it. The board itself no longer asks for that list: **Start Agent** now always runs in the project's main folder, so there is no branch to pick anymore — the command exists only because the route is still declared from an older version of this dialog.
+- It carries the **agent channel** described above: a loopback HTTP API where agent sessions can read the task summary (the mirror) and queue tasks and notes (the journal). It authenticates agents with a token it mints itself, stored in its own data dir next to `agent.json` — a file any process running as your user can read, which is exactly the trust every OpenCode session already has on this machine. The service keeps running while OpenChamber runs so agents always find it (the approval dialog says so); its data dir is deleted when the extension is removed.
 
 ## What this extension cannot do
 

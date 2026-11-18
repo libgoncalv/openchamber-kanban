@@ -8,6 +8,41 @@ export type ProjectsState = { state: 'loading' | 'ready' | 'error'; projects: Gu
 export const watchProjects = async (host: WorkspaceHost, listener: (state: ProjectsState) => void) =>
   host.onProjects((snapshot) => listener({ state: snapshot.state, projects: snapshot.projects }));
 
+export type ProjectsResult = { complete: boolean; projects: GuestProject[] };
+
+/**
+ * One-off project list — same resolve/release shape as `fetchSessions`. The
+ * board keeps a live list from `watchProjects`; this covers the window before
+ * that first snapshot (an agent-journal pull on the very first load needs
+ * real project directories to place agent-created tasks).
+ */
+export const fetchProjects = (host: WorkspaceHost, timeoutMs = 8000): Promise<ProjectsResult> =>
+  new Promise((resolve, reject) => {
+    let last: { state: string; projects: GuestProject[] } | null = null;
+    let settled = false;
+    let release: (() => void) | null = null;
+    const finish = (snapshot: { state: string; projects: GuestProject[] } | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      release?.();
+      resolve({ complete: snapshot?.state === 'ready', projects: snapshot?.projects ?? [] });
+    };
+    const timer = setTimeout(() => finish(last), timeoutMs);
+    host.onProjects((snapshot) => {
+      last = snapshot;
+      if (snapshot.state !== 'loading') finish(snapshot);
+    }).then((stop) => {
+      release = stop;
+      if (settled) stop();
+    }, (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+
 export type SessionsResult = { complete: boolean; sessions: GuestSessionRecord[]; allSessions: GuestSessionRecord[] };
 
 /**

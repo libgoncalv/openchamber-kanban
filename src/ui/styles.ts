@@ -67,6 +67,9 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-dialog-compact .kb-section{padding-top:10px}
 .kb-section{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--oc-border);padding-top:12px}
 .kb-section-title{font-size:12px;font-weight:600;color:var(--oc-muted);text-transform:uppercase;letter-spacing:.02em}
+.kb-agent-note{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--oc-border);border-radius:var(--oc-radius,8px);background:var(--oc-card,transparent)}
+.kb-agent-note-head{display:flex;align-items:center;justify-content:space-between}
+.kb-agent-note-text{white-space:pre-wrap;overflow-wrap:break-word;font-size:13px}
 .kb-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .kb-row.between{justify-content:space-between}
 .kb-muted{color:var(--oc-muted);font-size:12px}

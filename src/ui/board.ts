@@ -8,7 +8,7 @@ import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/task
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
 import { loadDismissedSessions, saveDismissedSessions } from '../store/dismissedSessions.ts';
-import { describeHostError, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
+import { describeHostError, fetchProjects, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
 import { createSessionSync } from '../host/sessionSync.ts';
 import { createWorktreeSync } from '../host/worktreeSync.ts';
 import { watchOrphanSessions } from '../host/orphanSessions.ts';
@@ -18,6 +18,9 @@ import { sessionLinkState, worktreeLinkState, type SessionGoneReason, type Sessi
 import { EXTENSION_ID, chatPromptForTask, taskUrl } from '../domain/chatLink.ts';
 import { sessionTitleForTask, titleForOrphanSession } from '../domain/autoTask.ts';
 import { resolveTaskWorktree } from '../domain/worktree.ts';
+import { planPendingApply } from '../domain/agentChannel.ts';
+import { newTaskId } from '../domain/task.ts';
+import { ackPendingEntries, fetchPendingEntries, pushMirror } from '../host/agentChannel.ts';
 import { mountTaskDetail } from './detail.ts';
 import { createDictation } from '../host/dictation.ts';
 import { mountKanbanView } from './kanbanView.ts';
@@ -26,7 +29,7 @@ import { el } from './dom.ts';
 
 export type BoardHost = Pick<
   HostClient,
-  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'prompt' | 'serviceRequest' | 'toast' | 'openMicrophone'
+  'storage' | 'onProjects' | 'onSessions' | 'onWorktrees' | 'openSession' | 'startSession' | 'prompt' | 'serviceRequest' | 'toast' | 'openMicrophone' | 'onServiceEvent'
 >;
 
 /**
@@ -213,6 +216,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     tasks = next;
     sessionSync.sync(tasks);
     worktreeSync.sync(tasks);
+    scheduleMirrorPush();
   };
 
   /**
@@ -298,6 +302,130 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
 
   const sessionSync = createSessionSync(host, SYNC_OPTIONS, applyAgentStatusChange, onSessionGone);
   const worktreeSync = createWorktreeSync(host, onWorktreeGone);
+
+  // ---- The agent channel: mirror push + journal apply ----
+  // How an OpenCode agent in one of this board's projects reads tasks and
+  // queues changes (see domain/agentChannel.ts). The service has no
+  // host.storage access and the board is the only writer, so the channel is
+  // two directions of best-effort sync: the mirror (reads, pushed debounced
+  // after every change) and the journal (writes, pulled on every load and on
+  // the service's live emit). Everything here degrades silently — the
+  // extension may run without a service at all.
+
+  /**
+   * The mirror push is debounced (a burst of saves is one push) and skipped
+   * while the live project list is empty: its value is mostly the per-task
+   * project name and directory an agent maps its own working directory
+   * against, so pushing before the first project snapshot lands is pushing
+   * a map-less mirror. The next change, load, or event re-tries it.
+   */
+  let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
+  let mirrorInFlight = false;
+  const pushMirrorNow = () => {
+    if (disposed) return;
+    mirrorInFlight = true;
+    void pushMirror(host, tasks, projects).finally(() => { mirrorInFlight = false; });
+  };
+  const scheduleMirrorPush = () => {
+    if (disposed || mirrorTimer !== null) return;
+    mirrorTimer = setTimeout(() => {
+      mirrorTimer = null;
+      if (disposed) return;
+      if (mirrorInFlight) { scheduleMirrorPush(); return; }
+      if (projects.length === 0) return;
+      pushMirrorNow();
+    }, 500);
+  };
+
+  /**
+   * Applies what agents queued while the board was closed — or just now, live
+   * (the service's `emit` lands here when a frame is open). One pure plan,
+   * then exactly the changed records saved with per-entry independence (one
+   * failure keeps only its own entry pending, retried by the next pull —
+   * the id acks remove only what provably landed, so a replay can never
+   * duplicate). A total service failure is silent: the channel is optional
+   * and the board's next load re-pulls.
+   */
+  let applyingAgentPending = false;
+  const applyAgentPending = async (): Promise<void> => {
+    if (applyingAgentPending || disposed) return;
+    applyingAgentPending = true;
+    try {
+      const entries = await fetchPendingEntries(host);
+      if (entries === null || entries.length === 0) return;
+      // The live list is the resolver of record for agent-created projects;
+      // before the watcher's first snapshot lands, ask once (same
+      // resolve/release pattern as the other one-off fetches).
+      const knownProjects = projects.length > 0
+        ? projects
+        : (await fetchProjects(host).catch(() => ({ projects: [] as GuestProject[] }))).projects;
+      // A plan failure (a stale journal can hold what today's validation
+      // refuses) must not kill an event-driven pull unhandled: stay quiet,
+      // keep the entries pending, let the next Refresh — which answers
+      // through its own error surface — retry them.
+      let plan;
+      try { plan = planPendingApply(entries, tasks, knownProjects, newTaskId, Date.now()); }
+      catch {
+        showBanner('An agent change could not be read', 'The queued entries stay pending — Refresh retries them.', 'warning');
+        return;
+      }
+      const createResults = await Promise.allSettled(plan.creates.map((entry) => saveTask(host, entry.task)));
+      const noteResults = await Promise.allSettled(plan.notes.map((note) => saveTask(host, note.task)));
+      const okCreates = plan.creates.filter((_, index) => createResults[index]?.status === 'fulfilled');
+      const okNotes = plan.notes.filter((_, index) => noteResults[index]?.status === 'fulfilled');
+      const failedCount = createResults.length + noteResults.length - okCreates.length - okNotes.length;
+      if (okCreates.length > 0 || okNotes.length > 0 || plan.dropped.length > 0) {
+        const acked = await ackPendingEntries(host, [
+          ...okCreates.map((entry) => entry.entryId),
+          ...okNotes.flatMap((note) => note.entryIds),
+          ...plan.dropped,
+        ]);
+        if (!acked) {
+          // The entries stay pending, so the next pull re-plans them — the
+          // creates would then be applied twice. Re-plan-time dedupe cannot
+          // know which ids landed, so treat a failed ack as a failed apply:
+          // reload from storage, which holds the truth.
+          void reload();
+          return;
+        }
+      }
+      if (okCreates.length > 0 || okNotes.length > 0) {
+        const createdIds = new Set(okCreates.map((entry) => entry.task.id));
+        const noteById = new Map(okNotes.map((note) => [note.taskId, note.task]));
+        const stillUnknown = (id: string) => !tasks.some((t) => t.id === id);
+        setTasks(
+          tasks
+            .map((task) => noteById.get(task.id) ?? task)
+            .concat(okCreates.filter((entry) => stillUnknown(entry.task.id)).map((entry) => entry.task)),
+        );
+        render();
+      }
+      const parts: string[] = [];
+      if (okCreates.length === 1) parts.push(`added "${okCreates[0]!.task.title}" (${STATUS_LABELS[okCreates[0]!.task.status]})`);
+      else if (okCreates.length > 1) parts.push(`added ${okCreates.length} tasks`);
+      if (okNotes.length === 1) {
+        const title = tasks.find((t) => t.id === okNotes[0]!.taskId)?.title ?? okNotes[0]!.taskId;
+        parts.push(`an agent left a note on "${title}"`);
+      } else if (okNotes.length > 1) parts.push(`agent notes landed on ${okNotes.length} tasks`);
+      if (parts.length > 0) {
+        void host.toast({ kind: 'info', message: `From an agent: ${parts.join(', ')}.` }).catch(() => undefined);
+      }
+      if (failedCount > 0) {
+        showBanner('Some agent changes could not be applied', `${failedCount} of ${plan.creates.length + plan.notes.length} stayed queued — Refresh retries them.`, 'warning');
+      }
+    } finally {
+      applyingAgentPending = false;
+    }
+  };
+  let agentPullTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleAgentPull = () => {
+    if (disposed || agentPullTimer !== null) return;
+    agentPullTimer = setTimeout(() => { agentPullTimer = null; void applyAgentPending(); }, 300);
+  };
+  const stopAgentEvents = host.onServiceEvent((event) => {
+    if (event.topic !== 'kanban-agent-change') return;
+    scheduleAgentPull();
+  });
 
   /** A deleted task's session stays out of automatic adoption, even after a reload. */
   let dismissedSessionIds = new Set<string>();
@@ -882,6 +1010,10 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       // are cleared before the orphan watcher starts, so a session whose link
       // is about to be dropped can never also be re-adopted as a duplicate.
       await reconcileLinks();
+      // Agent journal next, same reasoning: what lands here saves through the
+      // same task records the adoption watcher reads, and any pending creates
+      // are real cards the adoption guard must not mistake for orphans.
+      await applyAgentPending();
       if (prefs.openTaskId && tasks.some((t) => t.id === prefs.openTaskId)) openDetail(prefs.openTaskId);
     } catch (error) { notify(error); }
     finally { reloadButton.classList.remove('kb-spinning'); }
@@ -894,6 +1026,10 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     projects = state.projects;
     projectSelect.update({ options: projectOptions() });
     render();
+    // The first snapshot is what makes a mirror worth pushing (it carries the
+    // per-task project name and directory an agent maps itself against) — the
+    // tasks themselves may not have changed since the last debounced push.
+    scheduleMirrorPush();
   }).then((stop) => { if (disposed) stop(); else stopProjects = stop; }, (error) => { if (!disposed) notify(error); });
 
   const spinner = mountSpinner(spinnerSlot, { label: 'Loading board…' });
@@ -907,6 +1043,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     dispose: () => {
       disposed = true;
       clearLooksDoneTick();
+      if (mirrorTimer !== null) { clearTimeout(mirrorTimer); mirrorTimer = null; }
+      if (agentPullTimer !== null) { clearTimeout(agentPullTimer); agentPullTimer = null; }
+      stopAgentEvents();
       stopProjects?.();
       sessionSync.dispose();
       worktreeSync.dispose();

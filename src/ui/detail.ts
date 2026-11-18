@@ -339,6 +339,32 @@ export const mountTaskDetail = (root: Element, props: TaskDetailProps) => {
   };
   renderStatusSeg();
 
+  // --- Agent notes: what agents left on this task through the agent channel
+  // --- (a wrap-up to read at review time, or a breakdown note). The newest
+  // --- first — the wrap-up is what a Review card is opened for. Read-only:
+  // --- agents queue them through the service's journal and the board saved
+  // --- them; the user edits the task's own fields above, not these.
+  const notes = props.task.agentNotes ?? [];
+  if (notes.length > 0) {
+    const notesSection = el('div', 'kb-section'); dialog.append(notesSection);
+    notesSection.append(el('div', 'kb-section-title', 'Agent notes'));
+    const noteTime = (at: number) => {
+      const minutes = Math.floor((Date.now() - at) / 60_000);
+      if (minutes < 1) return 'just now';
+      if (minutes < 60) return `${minutes}m ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours}h ago`;
+      return new Date(at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+    for (const note of [...notes].reverse()) {
+      const noteRow = el('div', 'kb-agent-note');
+      const noteHead = el('div', 'kb-agent-note-head');
+      noteHead.append(el('span', 'kb-muted', noteTime(note.at)));
+      noteRow.append(noteHead, el('div', 'kb-agent-note-text', note.text));
+      notesSection.append(noteRow);
+    }
+  }
+
   const sessionSection = el('div', 'kb-section'); dialog.append(sessionSection);
   sessionSection.append(el('div', 'kb-section-title', 'OpenCode session'));
   const sessionBody = el('div', 'kb-row'); sessionSection.append(sessionBody);
