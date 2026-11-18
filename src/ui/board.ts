@@ -1,9 +1,10 @@
 import type { GuestProject, HostClient } from '@openchamber/sdk';
 import { mountBadge, mountBanner, mountMenu, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
-import { applyPatch, createTask, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
-import { ALL_PROJECTS, NO_PROJECT, planStatusMoves, rankAtEnd, type BoardFilter } from '../domain/board.ts';
+import { applyPatch, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
+import { ALL_PROJECTS, NO_PROJECT, planStatusMoves, type BoardFilter } from '../domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
 import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
+import { adoptOrphanSession } from '../store/adoptOps.ts';
 import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
@@ -16,7 +17,7 @@ import { fillComposerAfterOpen } from '../host/promptFill.ts';
 import { DEFAULT_SYNC_OPTIONS } from '../domain/sync.ts';
 import { sessionLinkState, worktreeLinkState, type SessionGoneReason, type SessionsView, type WorktreesView } from '../domain/unlink.ts';
 import { EXTENSION_ID, chatPromptForTask, taskUrl } from '../domain/chatLink.ts';
-import { sessionTitleForTask, titleForOrphanSession } from '../domain/autoTask.ts';
+import { sessionTitleForTask } from '../domain/autoTask.ts';
 import { resolveTaskWorktree } from '../domain/worktree.ts';
 import { planPendingApply } from '../domain/agentChannel.ts';
 import { newTaskId } from '../domain/task.ts';
@@ -45,8 +46,7 @@ const SYNC_OPTIONS = DEFAULT_SYNC_OPTIONS;
  * The full-screen board is the same kanban view as the rail panel, across
  * all projects (with a project filter and search), with the editing depth:
  * the detail popup, Start Agent, link/unlink, and the machinery that has no
- * place in a rail surface — the agent-status writer, adoption, and link
- * reconciliation. Rendering and shared mutations come from `kanbanView` and
+ * place in a rail surface — the agent-status writer and link reconciliation. Rendering and shared mutations come from `kanbanView` and
  * `taskOps`, so the two surfaces can never disagree on look or ordering.
  */
 export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { microphoneSupported?: boolean }) => {
@@ -474,6 +474,13 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
    * running, Review once it needs you (a question, a permission prompt, or
    * it already finished). Sessions older than the watermark (pre-dating
    * this feature's first use) are left alone, by design.
+   *
+   * The write itself lives in `store/adoptOps.ts`, the one adoption both
+   * open surfaces run — this page, and (since the rail learned it) the
+   * mirror. It reads storage freshly, so the rank comes from the real end
+   * of the real column and a session another surface adopted moments ago
+   * is never adopted twice here; a twin born inside the same instant is
+   * converged away by that op's id tie-break.
    */
   const adoptRunningSession = (projectId: string, session: { id: string; title: string; createdAt: number }, status: TaskStatus) => {
     if (disposed || startingAgents > 0 || attemptedSessions.has(session.id) || excludedSessionIds().has(session.id)) return;
@@ -481,16 +488,22 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     attemptedSessions.add(session.id);
     void (async () => {
       try {
-        const task: Task = {
-          ...createTask({ title: titleForOrphanSession(session, projects.find((p) => p.id === projectId)?.name ?? null), projectId, status }, rankAtEnd(tasks, status)),
-          sessionId: session.id,
-          // Landing straight in Review (already finished, or needs you) is just as unseen as any other automatic move there.
-          needsAttentionSince: status === 'review' ? Date.now() : null,
-        };
-        await saveTask(host, task);
-        setTasks([...tasks, task]);
+        const result = await adoptOrphanSession(host, {
+          projectId,
+          session,
+          status,
+          projectName: projects.find((p) => p.id === projectId)?.name ?? null,
+        });
+        if (result === null || disposed) return;
+        // The survivor of the shared op is what this view shows — the task
+        // just created here, or, when this call lost the same-instant race
+        // to another surface, that surface's record. Silent when lost: the
+        // winner's toast is the one that tells the story.
+        setTasks(tasks.filter((t) => t.id !== result.task.id).concat(result.task));
         render();
-        void host.toast({ kind: 'info', message: `Added "${task.title}" to the board (${STATUS_LABELS[status]}) — found a session running with no task.` }).catch(() => undefined);
+        if (result.adopted) {
+          void host.toast({ kind: 'info', message: `Added "${result.task.title}" to the board (${STATUS_LABELS[status]}) — found a session running with no task.` }).catch(() => undefined);
+        }
       } catch (error) { notify(error); }
     })();
   };

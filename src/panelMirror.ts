@@ -2,12 +2,16 @@ import type { GuestProject, HostClient } from '@openchamber/sdk';
 import { mountBadge } from '@openchamber/sdk/ui';
 import { loadTasks, saveTask, saveTaskRetrying } from './store/taskStore.ts';
 import { statusMove } from './store/taskOps.ts';
+import { adoptOrphanSession } from './store/adoptOps.ts';
+import { loadOrphanWatermark, saveOrphanWatermark } from './store/orphanWatermark.ts';
+import { loadDismissedSessions } from './store/dismissedSessions.ts';
 import { buildLinkPatch, buildStartSessionRequest, chatPromptForTask } from './domain/chatLink.ts';
 import { ALL_PROJECTS, matchesFilter } from './domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen } from './domain/boardView.ts';
-import { applyPatch, type Task } from './domain/task.ts';
+import { applyPatch, STATUS_LABELS, type Task, type TaskStatus } from './domain/task.ts';
 import { DEFAULT_SYNC_OPTIONS } from './domain/sync.ts';
 import { createSessionSync } from './host/sessionSync.ts';
+import { watchOrphanSessions } from './host/orphanSessions.ts';
 import { describeHostError, projectForDirectory } from './host/workspace.ts';
 import { fillComposerAfterOpen } from './host/promptFill.ts';
 import { mountKanbanView } from './ui/kanbanView.ts';
@@ -27,13 +31,13 @@ export type MirrorHost = Pick<
  * the task Done, through the same kept-rank status move the ⋯ menu takes;
  * and the chat button beside it opens the card's linked chat — or, when the
  * card has none, starts one attached to the card (no first message, the user
- * writes it) and links it here before navigating. It writes no status of its
- * own beyond those two: agent-driven moves stay display-only until the board
- * — still the only writer of those, and the only surface for opening,
- * editing, moving, creating or deleting tasks — opens. What the mirror does
- * update by itself is what it shows: live agent state per linked session,
- * regrouped for display only — where a row sits marks the move the board
- * will persist the next time it opens.
+ * writes it) and links it here before navigating. Its one automatic write is
+ * the session adoption the page also runs (`store/adoptOps.ts`, its own
+ * orphan watcher below): importing a running session with no task as a card
+ * here, without the board ever opening — it is an import, never a regroup.
+ * What the mirror does update by itself is what it shows: live agent state
+ * per linked session, regrouped for display only — where a row sits marks
+ * the move the board will persist the next time it opens.
  *
  * Mountable, not a script that runs on import: the rail entry mounts it once
  * for its frame's lifetime, and the adaptive frame entry (`src/frame.ts`)
@@ -93,6 +97,80 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       scheduleReload();
     },
   });
+
+  // ---- Orphan adoption (the page's own, run here too) ----
+
+  /** A deleted task's session stays out of automatic adoption, even after a reload. */
+  let dismissedSessionIds = new Set<string>();
+  const excludedSessionIds = () => new Set([
+    ...dismissedSessionIds,
+    ...tasks.flatMap((task) => (task.sessionId ? [task.sessionId] : [])),
+  ]);
+  /**
+   * Every session id this mount has ever tried to adopt, success or failure.
+   * A live session's `onSessions` snapshot fires continuously while it runs,
+   * so this must be a permanent-for-this-mount guard, not cleared on failure
+   * — otherwise a single persistent storage error turns into a
+   * retry-and-error-toast storm on every snapshot tick.
+   */
+  const attemptedSessions = new Set<string>();
+  /**
+   * How many `startSession` calls (the mirror's chat starts) are currently in
+   * flight. While this is above zero, adoption is paused: the host can report
+   * the new session it is in the middle of creating to this mount's own
+   * orphan watcher before that promise resolves, and the pause is what keeps
+   * that session off the adopter until the link below claims it. The same
+   * rule the page keeps around its Start Agent.
+   */
+  let startingAgents = 0;
+  /**
+   * The persisted "going forward" cutoff (`store/orphanWatermark.ts`), loaded
+   * with the first task load and first-run initialized there if this panel is
+   * the feature's first surface ever — `Infinity` until then, so nothing is
+   * adopted on a race before the real value is known.
+   */
+  let orphanWatermark = Infinity;
+  /** Started only after the first load; stopped with the mirror's dispose. */
+  let orphanWatcher: { dispose: () => void } | null = null;
+
+  /**
+   * The page's adoption, run here so a session that comes alive while only
+   * this narrow panel is open gets its card without a board ever being
+   * opened. Scoped the way this panel displays: the locked project only —
+   * every registered project in show-all mode, exactly the cards this view
+   * could show, so the mirror never writes a board it cannot display. The
+   * shared write (`store/adoptOps.ts`) re-reads storage, so a session
+   * another surface adopted moments ago returns `null` here, and a twin born
+   * inside the same instant is converged away by that op's id tie-break; the
+   * loser stays silent, the winner's toast being the one that tells the
+   * story.
+   */
+  const adoptRunningSession = (projectId: string, session: { id: string; title: string; createdAt: number }, status: TaskStatus) => {
+    if (currentProject && projectId !== currentProject.id) return;
+    if (disposed || startingAgents > 0 || attemptedSessions.has(session.id) || excludedSessionIds().has(session.id)) return;
+    if (session.createdAt < orphanWatermark) return;
+    attemptedSessions.add(session.id);
+    void (async () => {
+      try {
+        const result = await adoptOrphanSession(host, {
+          projectId,
+          session,
+          status,
+          projectName: projects.find((p) => p.id === projectId)?.name ?? null,
+        });
+        if (result === null || disposed) return;
+        applyTasks(tasks.filter((t) => t.id !== result.task.id).concat(result.task));
+        if (everLoaded) render();
+        if (result.adopted) {
+          void host.toast({ kind: 'info', message: `Added "${result.task.title}" to the board (${STATUS_LABELS[status]}) — found a session running with no task.` }).catch(() => undefined);
+        }
+      } catch (error) {
+        // Reported once: the per-mount guard above keeps the
+        // continuously-firing snapshots from echoing a persistent failure.
+        void host.toast({ kind: 'error', message: `Could not add the task for a found session — ${describeHostError(error)}` }).catch(() => undefined);
+      }
+    })();
+  };
 
   const resolveCurrentProject = () => {
     currentProject = projectForDirectory(projects, currentDirectory);
@@ -175,12 +253,22 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       // guess about where the chat should run.
       if (!current.projectId) return;
       const request = buildStartSessionRequest(current);
+      // Adoption paused while this mount's own start is in flight — the host
+      // can publish the new session to this watcher before the request
+      // resolves, and without the pause that session would be adopted as a
+      // second task before the link below claims it. Claimed inside the try
+      // (below), before the pause lifts: no instant is left open between
+      // the two.
+      startingAgents += 1;
       let result;
       try {
         result = await host.startSession(request);
+        if (result.sessionId !== null) attemptedSessions.add(result.sessionId);
       } catch (error) {
         void host.toast({ kind: 'error', message: `Could not start the chat for "${current.title}" — ${describeHostError(error)}` }).catch(() => undefined);
         return;
+      } finally {
+        startingAgents -= 1;
       }
       if (result.sessionId === null) {
         void host.toast({ kind: 'error', message: `Could not start the chat (${result.failure}). Its worktree at ${result.directory} was kept so you can recover it by hand.` }).catch(() => undefined);
@@ -266,12 +354,27 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
 
   const start = async () => {
     try {
-      const loaded = await loadTasks(host);
+      const [loaded, watermark, dismissed] = await Promise.all([loadTasks(host), loadOrphanWatermark(host), loadDismissedSessions(host)]);
       if (disposed) return;
       applyTasks(loaded.tasks);
+      dismissedSessionIds = dismissed;
+      if (watermark === null) {
+        // First time this feature has ever run, from any surface: nothing
+        // that already exists right now is "going forward".
+        orphanWatermark = Date.now();
+        void saveOrphanWatermark(host, orphanWatermark).catch(() => undefined);
+      } else {
+        orphanWatermark = watermark;
+      }
       everLoaded = true;
       statusEl.hidden = true;
       render();
+      // Same ordering the page keeps: the watcher starts only after the first
+      // load has landed, so a session already linked to a persisted task is
+      // never mistaken for an orphan. Disposed with the mirror, so the
+      // frame's other mode (the board, mounting after a swap) always has
+      // exactly one live adopter per open surface.
+      orphanWatcher = watchOrphanSessions(host, excludedSessionIds, (found) => adoptRunningSession(found.projectId, found.session, found.status));
     } catch (error) {
       statusEl.textContent = `Could not load tasks — ${describeHostError(error)}`;
     }
@@ -281,8 +384,12 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
     if (disposed || reloading) return;
     reloading = true;
     try {
-      const { tasks: loaded } = await loadTasks(host);
+      const [{ tasks: loaded }, dismissed] = await Promise.all([loadTasks(host), loadDismissedSessions(host)]);
       if (disposed) return;
+      // The dismissal list is storage-truth, re-read like the tasks: a task
+      // deleted by the board (the mirror deletes nothing) must keep its
+      // session out of this surface's adoption afterwards.
+      dismissedSessionIds = dismissed;
       applyTasks(loaded);
       if (!everLoaded) { everLoaded = true; statusEl.hidden = true; }
       render();
@@ -334,6 +441,7 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
       stopProjects?.();
       stopDirectory();
+      orphanWatcher?.dispose();
       sessionSync.dispose();
       board?.dispose();
     },
