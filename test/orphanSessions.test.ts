@@ -76,6 +76,21 @@ test('a session already linked to a task is never reported', async () => {
   watcher.dispose();
 });
 
+test('a non-build agent finished or waiting session is not adopted; the build one is', async () => {
+  const { host, pushProjects, pushSessions } = fakeHost();
+  const found: Array<{ id: string; status: string }> = [];
+  const watcher = watchOrphanSessions(host, () => new Set(), (f) => found.push({ id: f.session.id, status: f.status }));
+  pushProjects(projectsSnapshot(['p1']));
+  await Promise.resolve();
+  pushSessions('p1', sessionsSnapshot('p1', [
+    session('ses_plan_done', { activity: 'idle', outcome: 'completed', agent: 'plan', createdAt: 500 }),
+    session('ses_plan_ask', { activity: 'waiting-question', agent: 'plan', createdAt: 600 }),
+    session('ses_build_done', { activity: 'idle', outcome: 'completed', agent: 'build', createdAt: 700 }),
+  ]));
+  assert.deepEqual(found, [{ id: 'ses_build_done', status: 'review' }], 'a plan session gets a card only once a turn of its own runs');
+  watcher.dispose();
+});
+
 test('a dismissed session stays excluded while an unrelated sidebar session is still adopted', async () => {
   const { host, pushProjects, pushSessions } = fakeHost();
   const found: string[] = [];

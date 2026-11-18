@@ -27,6 +27,15 @@ test('initialStatusForNewSession lands the task in In Progress while running, Re
   assert.equal(initialStatusForNewSession({ activity: 'idle', outcome: 'failed' }), 'review');
 });
 
+test('a non-build agent holds its session out of the board until a new turn runs', () => {
+  assert.equal(initialStatusForNewSession({ activity: 'running', outcome: null, agent: 'plan' }), 'in_progress', 'the gate never touches In Progress');
+  assert.equal(initialStatusForNewSession({ activity: 'waiting-question', outcome: null, agent: 'plan' }), null);
+  assert.equal(initialStatusForNewSession({ activity: 'waiting-permission', outcome: null, agent: 'plan' }), null);
+  assert.equal(initialStatusForNewSession({ activity: 'idle', outcome: 'completed', agent: 'plan' }), null);
+  assert.equal(initialStatusForNewSession({ activity: 'idle', outcome: 'failed', agent: 'plan' }), null);
+  assert.equal(initialStatusForNewSession({ activity: 'idle', outcome: 'completed', agent: 'build' }), 'review');
+});
+
 test('initialStatusForNewSession is null for a session not active enough yet to adopt', () => {
   assert.equal(initialStatusForNewSession({ activity: 'idle', outcome: null }), null);
   assert.equal(initialStatusForNewSession({ activity: 'unknown', outcome: null }), null);

@@ -22,6 +22,12 @@ export type SessionLiveState = {
   projectId: string;
   activity: GuestSessionActivity;
   outcome: AgentOutcome;
+  /**
+   * The agent the session runs as, from the same snapshot (`null` when the
+   * host predates the field). Feeds `sync.ts`'s build-agent Review gate, so
+   * both surfaces show the same gated display.
+   */
+  agent: string | null;
   /** The session's own last-change time — the closest thing to "when it started needing attention" for a task whose marker could never be persisted. */
   updatedAt: number;
 };
@@ -104,7 +110,7 @@ export const effectiveStatus = (
   state: SessionLiveState | null,
   sync: SyncOptions = DEFAULT_SYNC_OPTIONS,
 ): TaskStatus =>
-  state ? statusForSession(task.status, state.activity, state.outcome, sync) ?? task.status : task.status;
+  state ? statusForSession(task.status, state.activity, state.outcome, state.agent, sync) ?? task.status : task.status;
 
 export const liveStateFor = (task: Task, live: ReadonlyMap<string, SessionLiveState>): SessionLiveState | null =>
   task.sessionId ? live.get(task.sessionId) ?? null : null;

@@ -73,6 +73,23 @@ test('a done task does not get moved even while its session keeps running', asyn
   assert.deepEqual(changes, []);
 });
 
+test('a session running as anything but build never moves its task to review, until it switches', async () => {
+  const { host, push } = fakeHost();
+  const changes: Array<[string, TaskStatus]> = [];
+  const sync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, (id, status) => changes.push([id, status]));
+  const task = { ...createTask({ title: 't', projectId: 'p1' }, 1), sessionId: 'ses_1' };
+  sync.sync([task]);
+  await Promise.resolve();
+  push('p1', snapshot('p1', [{ ...session('ses_1', 'idle', 'completed'), agent: 'plan' }]));
+  push('p1', snapshot('p1', [{ ...session('ses_1', 'waiting-question'), agent: 'plan' }]));
+  push('p1', snapshot('p1', [{ ...session('ses_1', 'idle', 'failed'), agent: 'plan' }]));
+  assert.deepEqual(changes, [], 'plan turns leave the task where it is');
+  assert.equal(sync.live().get('ses_1')?.agent, 'plan', 'the live map carries the agent for the display');
+  // The user switching the session to build opens the gate on the spot.
+  push('p1', snapshot('p1', [{ ...session('ses_1', 'idle', 'completed'), agent: 'build' }]));
+  assert.deepEqual(changes, [[task.id, 'review']]);
+});
+
 test('dispose releases every open subscription', async () => {
   const { host, unsubscribed } = fakeHost();
   const sync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, () => {});

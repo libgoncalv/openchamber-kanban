@@ -27,7 +27,7 @@ const task = (title: string, status: Task['status'], rank: number, extra: Partia
 const ALL: BoardFilter = { projectId: ALL_PROJECTS };
 
 const state = (over: Partial<SessionLiveState> = {}): SessionLiveState =>
-  ({ projectId: 'p1', activity: 'running', outcome: null, updatedAt: 5000, ...over });
+  ({ projectId: 'p1', activity: 'running', outcome: null, agent: 'build', updatedAt: 5000, ...over });
 
 test('rows group by stored status in rank order when nothing live is known', () => {
   const a = task('a', 'todo', 2048);
@@ -74,6 +74,29 @@ test('a waiting agent (question or permission) lands in Review and is flagged un
     assert.equal(sections.review[0]?.attention, true, activity);
     assert.equal(sections.in_progress.length, 0, activity);
   }
+});
+
+test('a non-build agent never lands the row in Review; a legacy host keeps the old display', () => {
+  for (const activity of ['waiting-question', 'waiting-permission'] as const) {
+    const t = task(`p-${activity}`, 'todo', 1, { sessionId: 'sp', projectId: 'p1' });
+    const live = new Map([['sp', state({ activity, agent: 'plan', updatedAt: 900 })]]);
+    const sections = buildBoardView([t], live, ALL);
+    assert.equal(sections.todo[0]?.displayStatus, 'todo', activity);
+    assert.equal(sections.todo[0]?.movedByAgent, false, activity);
+    assert.equal(sections.todo[0]?.attention, false, activity);
+  }
+  // A plan session that finished mid-turn stays where it ran.
+  const finishedRun = task('fin-plan', 'in_progress', 1, { sessionId: 'sf', projectId: 'p1' });
+  const planLive = new Map([['sf', state({ activity: 'idle', outcome: 'completed', agent: 'plan', updatedAt: 600 })]]);
+  const planView = buildBoardView([finishedRun], planLive, ALL);
+  assert.equal(planView.in_progress[0]?.displayStatus, 'in_progress');
+  assert.equal(planView.in_progress[0]?.attention, false);
+  // A host without the agent field keeps the old behavior.
+  const legacy = task('legacy', 'in_progress', 1, { sessionId: 'sl', projectId: 'p1' });
+  const legacyLive = new Map([['sl', state({ activity: 'idle', outcome: 'completed', agent: null, updatedAt: 600 })]]);
+  const legacyView = buildBoardView([legacy], legacyLive, ALL);
+  assert.equal(legacyView.review[0]?.displayStatus, 'review');
+  assert.equal(legacyView.review[0]?.attention, true);
 });
 
 test('Done is never moved by the agent, and a stale marker there does not count as unseen', () => {

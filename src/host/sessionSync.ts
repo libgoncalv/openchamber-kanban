@@ -59,7 +59,7 @@ export const createSessionSync = (
     if (snapshot.state !== 'ready') return dropped > 0;
     for (const session of snapshot.sessions) {
       if (session.parentId !== null) continue; // subagent sessions are never a task's chat
-      liveState.set(session.id, { projectId, activity: session.activity, outcome: session.outcome, updatedAt: session.updatedAt });
+      liveState.set(session.id, { projectId, activity: session.activity, outcome: session.outcome, agent: session.agent ?? null, updatedAt: session.updatedAt });
     }
     return true;
   };
@@ -80,7 +80,7 @@ export const createSessionSync = (
         }
         const session = snapshot.sessions.find((candidate) => candidate.id === task.sessionId);
         if (!session) continue;
-        const next = statusForSession(task.status, session.activity, session.outcome, options);
+        const next = statusForSession(task.status, session.activity, session.outcome, session.agent ?? null, options);
         if (next) onStatusChange(task.id, next);
       }
     }

@@ -9,6 +9,8 @@ export type OrphanCandidate = {
   archivedAt: number | null;
   activity: GuestSessionActivity;
   outcome: AgentOutcome;
+  /** The agent the session runs as (`undefined` on hosts older than the field). */
+  agent?: string | null;
 };
 
 /** Structural eligibility only: a real top-level session, not archived, that no task already points to. */
@@ -20,12 +22,16 @@ export const isAdoptable = (session: Pick<OrphanCandidate, 'id' | 'parentId' | '
  * current activity — reuses the same mapping the live sync uses, just
  * starting from a status ("backlog") no real task has, so the first
  * matching rule always fires. `null` means not active enough yet to adopt
- * (for example, just created with no turn started).
+ * (for example, just created with no turn started) — and, with the
+ * build-agent Review gate, it also covers a session running as anything
+ * else that finished or now waits on the user: for such a session nothing
+ * the mapping holds true, so it is not adopted until a new turn of its own
+ * starts running.
  */
 export const initialStatusForNewSession = (
-  session: Pick<OrphanCandidate, 'activity' | 'outcome'>,
+  session: Pick<OrphanCandidate, 'activity' | 'outcome' | 'agent'>,
   options: SyncOptions = DEFAULT_SYNC_OPTIONS,
-): TaskStatus | null => statusForSession('backlog', session.activity, session.outcome, options);
+): TaskStatus | null => statusForSession('backlog', session.activity, session.outcome, session.agent ?? null, options);
 
 /**
  * The host falls back to the session's own id as its `title` until OpenCode
