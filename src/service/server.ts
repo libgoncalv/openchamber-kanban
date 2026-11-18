@@ -40,6 +40,16 @@ export type ServiceDeps = {
 /** A request body is at most a few wire chunks; anything larger is refused. */
 const BODY_MAX = 131_072;
 
+/**
+ * What a `base` may be for the commits-ahead route: a plain, refish,
+ * single word (no leading dash, `.` and friends excluded by the range
+ * composition itself) — the route runs `includes('..')` on top, before
+ * git ever sees the composed range. A deleted branch still matches the
+ * pattern; git answers the failure, which the page reads as unknown
+ * evidence, never a write.
+ */
+const COMMIT_BASE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
 const readBody = (req: http.IncomingMessage): Promise<string | null> =>
   new Promise((resolve) => {
     let size = 0;
@@ -144,6 +154,35 @@ export const createServiceServer = ({ token, git, transcriber, agent }: ServiceD
             return;
           }
           json(res, 200, { branches: parseGitRefOutput(result.stdout) });
+          return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/commits-ahead') {
+          const directory = url.searchParams.get('directory') ?? '';
+          const base = url.searchParams.get('base') ?? '';
+          // The base becomes one argv element in `<base>..HEAD`, so it must be
+          // a plain ref: no leading dash (an arg, not a ref), no `..` inside
+          // (this is the range's left side), and only ref-ish characters.
+          if (!path.isAbsolute(directory) || !COMMIT_BASE_PATTERN.test(base) || base.includes('..')) {
+            json(res, 400, { error: 'bad-request' });
+            return;
+          }
+          const count = await git(directory, ['rev-list', '--count', `${base}..HEAD`]);
+          if (!count.ok) {
+            json(res, count.status, { error: count.error });
+            return;
+          }
+          const head = await git(directory, ['rev-parse', 'HEAD']);
+          if (!head.ok) {
+            json(res, head.status, { error: head.error });
+            return;
+          }
+          const ahead = Number.parseInt(count.stdout.trim(), 10);
+          if (!Number.isInteger(ahead) || ahead < 0) {
+            json(res, 500, { error: 'unparseable rev-list output' });
+            return;
+          }
+          json(res, 200, { ahead, head: head.stdout.trim() || null });
           return;
         }
 

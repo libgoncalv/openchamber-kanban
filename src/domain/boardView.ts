@@ -30,6 +30,16 @@ export type SessionLiveState = {
   agent: string | null;
   /** The session's own last-change time — the closest thing to "when it started needing attention" for a task whose marker could never be persisted. */
   updatedAt: number;
+  /**
+   * Whether the host still marks the session unread: `false` once anyone
+   * has opened the chat anywhere since its last turn ended (OpenCode
+   * sidebar, mobile, another device — this is host state, kept by
+   * OpenCode), `true` while it still waits, `null` on hosts predating the
+   * field. The out-of-band visit signal behind the board's auto-done rule
+   * (`autoDoneCandidate`): reviewing a card may happen far away from the
+   * board, and this is the board's only way to see it.
+   */
+  unread: boolean | null;
 };
 
 export type ActivityTone = 'running' | 'waiting' | 'failed' | 'idle';
@@ -57,9 +67,11 @@ export type ActivityLine = { key: ActivityKey; text: string; tone: ActivityTone 
  * in Review. This is the board's analog of OpenChamber's own In-work
  * "looks done" hint — a suggestion for the user, never a status write: Done
  * still comes only from the user's own click.
- *  - `'hint'` — the task is unseen (`needsAttentionSince` set): the
- *    success-tinted ✓ on the page card, always visible — it IS the suggestion.
- *  - `'quiet'` — the task was seen (marker cleared): the same ✓ muted, revealed
+ *  - `'hint'` — the task is unseen (`needsAttentionSince` set and the host
+ *    does not report the session opened elsewhere): the success-tinted ✓
+ *    on the page card, always visible — it IS the suggestion.
+ *  - `'quiet'` — the task was seen (marker cleared, or the host reports
+ *    `unread: false` — its chat was opened anywhere): the same ✓ muted, revealed
  *    on hover/focus like the ⋯ menu. Page cards only — the rail wears no
  *    looks-done signal of its own.
  */
@@ -103,7 +115,9 @@ export type BoardSections = Record<TaskStatus, BoardItem[]>;
  * The status to display for a task. Reuses the board's own pure mapping
  * (`statusForSession`) so every surface shows what the board *will* save
  * the next time it opens — without the rail ever writing a status itself.
- * Done stays done: the mapping already refuses to move it.
+ * Done holds against every non-running snapshot (see `statusForSession`);
+ * a running session regroups it back into In Progress, the rework
+ * pull-back, on both surfaces.
  */
 export const effectiveStatus = (
   task: Task,
@@ -142,7 +156,7 @@ export const looksDoneFor = (
   if (!state || state.activity !== 'idle' || state.outcome !== 'completed') return null;
   if (task.status !== 'review') return null;
   if (now - looksDoneReference(task, state) < quietMs) return null;
-  return task.needsAttentionSince !== null ? 'hint' : 'quiet';
+  return task.needsAttentionSince !== null && state.unread !== false ? 'hint' : 'quiet';
 };
 
 /** The ✓ button's tooltip at `now`; `null` when no ✓ shows for this task. */
@@ -185,6 +199,46 @@ export const nextLooksDoneTickAt = (
   return reference + (Math.floor(elapsed / 60_000) + 1) * 60_000;
 };
 
+/**
+ * Whether the board's auto-done rule may write Done for this task itself,
+ * from purely stored and live facts. `true` here only puts the card in
+ * shape for the commit check the domain cannot run: in Review, already
+ * visited, and its session stopped.
+ *
+ *  - In Review, however it landed there (the chosen scope: any task in
+ *    Review, a user's own drag included).
+ *  - Visited: the marker the board sets when the agent lands a card in
+ *    Review is cleared (the user opened the card here), or the host
+ *    reports the session `unread: false` (the user opened its chat
+ *    anywhere else — OpenCode sidebar, mobile, another device).
+ *  - The session stopped: a linked session must be trusted-idle with any
+ *    outcome but `failed`; and a linked session whose state is unknown
+ *    waits — it might be running right now, and the board must never
+ *    write Done while the live sync would yank it straight back to
+ *    In Progress. No linked session at all also qualifies. A waiting
+ *    snapshot never qualifies either: the agent is mid-question, not done.
+ *  - There is something to check: a worktree with a directory and a
+ *    recorded source branch to count commits ahead of. Tasks without
+ *    either stay manual, no matter how visited they are.
+ *
+ * The commit evidence itself is the watcher's job (`autoDoneSync`): it
+ * asks the service how far the worktree sits ahead of that source branch,
+ * compares the HEAD hash with the task's guard (`autoDoneCommit`), and
+ * only then writes Done through the board's shared ops.
+ */
+export const autoDoneCandidate = (task: Task, state: SessionLiveState | null): boolean => {
+  if (task.status !== 'review') return false;
+  if (task.worktree === null || task.sourceBranch === null) return false;
+  const visited = task.needsAttentionSince === null || state?.unread === false;
+  if (!visited) return false;
+  if (task.sessionId !== null) {
+    if (state === null) return false;
+    if (state.activity !== 'idle') return false;
+    if (state.outcome === 'failed') return false;
+  }
+  return true;
+};
+
 export const buildBoardItem = (
   task: Task,
   live: ReadonlyMap<string, SessionLiveState>,
@@ -197,15 +251,23 @@ export const buildBoardItem = (
   // Unseen either through the stored marker (the board's own sync set it
   // before) or because the agent landed it in Review while no board was
   // running — nothing was around to persist the marker then, so the row
-  // flags for display only, exactly like the board would have.
-  const attention = task.needsAttentionSince !== null || (movedByAgent && displayStatus === 'review');
+  // flags for display only, exactly like the board would have. A marker
+  // whose session the host reports as opened elsewhere (`unread: false`)
+  // is not unseen: the visit happened, just not through this board — the
+  // board page persists that by clearing the marker when it observes it
+  // (`autoDoneSync`), but the rail never writes, so the display checks it
+  // directly.
+  const markerUnseen = task.needsAttentionSince !== null && state?.unread !== false;
+  const attention =
+    markerUnseen ||
+    (movedByAgent && displayStatus === 'review' && !(state?.unread === false));
   const looksDone = looksDoneFor(task, state, now);
   return {
     task,
     displayStatus,
     movedByAgent,
     attention,
-    attentionSince: task.needsAttentionSince ?? (attention && state ? state.updatedAt : null),
+    attentionSince: markerUnseen ? task.needsAttentionSince : (attention && state ? state.updatedAt : null),
     live: state,
     looksDone,
     looksDoneNote: looksDone ? looksDoneTooltip(task, state, now) : null,

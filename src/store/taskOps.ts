@@ -61,6 +61,21 @@ export const statusMove = (task: Task, status: TaskStatus): Task | null => {
   return applyPatch(task, { status, needsAttentionSince: null });
 };
 
+/**
+ * The board's auto-done write (fed by `autoDoneSync`): Done, kept rank, an
+ * attention marker cleared — a card whose visits and commits check out is
+ * acknowledged, the user-click semantics of every deliberate move — plus
+ * the rule's own guard: `autoDoneCommit` records the worktree HEAD hash at
+ * fire time, so nothing re-fires while that is still HEAD. Drags back out
+ * of Done hold until a newer commit lands. `null` when the task is not in
+ * Review (the watcher's fetch raced a move or a delete; the caller then
+ * writes and saves nothing) — and pure, like everything in this file.
+ */
+export const autoDoneMove = (task: Task, commitSha: string): Task | null => {
+  if (task.status !== 'review') return null;
+  return applyPatch(task, { status: 'done', needsAttentionSince: null, autoDoneCommit: commitSha });
+};
+
 /** Applies any patch to one task in the list; `null` when the id is unknown. Pure. */
 export const patchTask = (tasks: readonly Task[], id: string, patch: TaskPatch): { next: Task[]; task: Task } | null => {
   const current = tasks.find((task) => task.id === id);

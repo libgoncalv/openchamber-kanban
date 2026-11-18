@@ -3,7 +3,7 @@ import { mountBadge, mountBanner, mountMenu, mountSelect, mountSpinner } from '@
 import { applyPatch, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
 import { ALL_PROJECTS, NO_PROJECT, planStatusMoves, type BoardFilter } from '../domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
-import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
+import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove, autoDoneMove } from '../store/taskOps.ts';
 import { adoptOrphanSession } from '../store/adoptOps.ts';
 import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
@@ -12,6 +12,7 @@ import { loadDismissedSessions, saveDismissedSessions } from '../store/dismissed
 import { describeHostError, fetchProjects, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
 import { createSessionSync } from '../host/sessionSync.ts';
 import { createWorktreeSync } from '../host/worktreeSync.ts';
+import { createAutoDoneSync } from '../host/autoDoneSync.ts';
 import { watchOrphanSessions } from '../host/orphanSessions.ts';
 import { fillComposerAfterOpen } from '../host/promptFill.ts';
 import { DEFAULT_SYNC_OPTIONS } from '../domain/sync.ts';
@@ -34,11 +35,15 @@ export type BoardHost = Pick<
 >;
 
 /**
- * Agent state drives task status, one direction only: the agent working
- * moves a task to In Progress, and the agent finishing, asking a question,
- * hitting a permission prompt, or failing moves it to Review — never to
- * Done. A task the user marked Done stays there regardless of what its
- * session does afterwards; only the user's own Mark Done ever sets it.
+ * Agent state drives task status, one direction only per move: the agent
+ * working moves a task to In Progress — from Done too, the rework
+ * pull-back — and the agent finishing, asking a question, hitting a
+ * permission prompt, or failing moves it to Review — never to Done. Done
+ * is written two ways only: the user's own Mark Done (a click, drag, or
+ * the ✓), and the board's auto-done rule (`autoDoneReady`-shaped
+ * conditions in `boardView.ts`, checked by `autoDoneSync` below) after a
+ * visited Review card's worktree shows commits ahead of its source
+ * branch.
  */
 const SYNC_OPTIONS = DEFAULT_SYNC_OPTIONS;
 
@@ -216,6 +221,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     tasks = next;
     sessionSync.sync(tasks);
     worktreeSync.sync(tasks);
+    autoDoneSync.sync(tasks);
     scheduleMirrorPush();
   };
 
@@ -300,8 +306,40 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     clearTaskLink(taskId, { worktree: null }, `Cleared the worktree link on "${task.title}" — that worktree was deleted.`);
   };
 
-  const sessionSync = createSessionSync(host, SYNC_OPTIONS, applyAgentStatusChange, onSessionGone);
+  const sessionSync = createSessionSync(host, SYNC_OPTIONS, applyAgentStatusChange, onSessionGone, {
+    /** Trusted snapshots feed the auto-done rule: a session stopping, or being read elsewhere. */
+    onLiveChange: () => { if (!disposed) autoDoneSync.evaluate(); },
+  });
   const worktreeSync = createWorktreeSync(host, onWorktreeGone);
+
+  /**
+   * The auto-done rule's writes (see `autoDoneSync`). Both persist through
+   * the board's own save/rollback discipline — state first, render, save;
+   * a failure notifies and reloads to the stored truth. The commit check's
+   * result races real moves, so each writer re-finds and re-checks before
+   * touching anything: `autoDoneMove` answers `null` unless the task still
+   * sits in Review, and the observed-read writer skips a marker already
+   * gone.
+   */
+  const autoDoneSync = createAutoDoneSync(host, () => sessionSync.live(), {
+    onAutoDone: (taskId, commitSha) => {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) return;
+      const updated = autoDoneMove(task, commitSha);
+      if (!updated) return;
+      setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
+      render();
+      void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
+    },
+    onObservedRead: (taskId) => {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task || task.needsAttentionSince === null) return;
+      const updated = applyPatch(task, { needsAttentionSince: null });
+      setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
+      render();
+      void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
+    },
+  });
 
   // ---- The agent channel: mirror push + journal apply ----
   // How an OpenCode agent in one of this board's projects reads tasks and
@@ -1062,6 +1100,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       stopProjects?.();
       sessionSync.dispose();
       worktreeSync.dispose();
+      autoDoneSync.dispose();
       orphanWatcher?.dispose();
       detail?.dispose();
       board.dispose();

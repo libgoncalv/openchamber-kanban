@@ -14,6 +14,7 @@ import {
   looksDoneFor,
   looksDoneTooltip,
   nextLooksDoneTickAt,
+  autoDoneCandidate,
   LOOKS_DONE_QUIET_MS,
   type BoardItem,
   type SessionLiveState,
@@ -27,7 +28,7 @@ const task = (title: string, status: Task['status'], rank: number, extra: Partia
 const ALL: BoardFilter = { projectId: ALL_PROJECTS };
 
 const state = (over: Partial<SessionLiveState> = {}): SessionLiveState =>
-  ({ projectId: 'p1', activity: 'running', outcome: null, agent: 'build', updatedAt: 5000, ...over });
+  ({ projectId: 'p1', activity: 'running', outcome: null, agent: 'build', updatedAt: 5000, unread: null, ...over });
 
 test('rows group by stored status in rank order when nothing live is known', () => {
   const a = task('a', 'todo', 2048);
@@ -99,10 +100,16 @@ test('a non-build agent never lands the row in Review; a legacy host keeps the o
   assert.equal(legacyView.review[0]?.attention, true);
 });
 
-test('Done is never moved by the agent, and a stale marker there does not count as unseen', () => {
-  const t = task('done', 'done', 1, { sessionId: 's3', projectId: 'p1', needsAttentionSince: 2000 });
-  const live = new Map([['s3', state()]]);
-  const sections = buildBoardView([t], live, ALL);
+test('a Done card only leaves Done for a running session, and a stale marker there never counts as unseen anyway', () => {
+  // Rework pull-back, displayed: the session runs again, the row regroups to In Progress.
+  const reworking = task('rework', 'done', 1, { sessionId: 's3', projectId: 'p1' });
+  const running = buildBoardView([reworking], new Map([['s3', state()]]), ALL);
+  assert.equal(running.in_progress[0]?.displayStatus, 'in_progress');
+  assert.equal(running.in_progress[0]?.movedByAgent, true);
+  // Quiet again: the card keeps its Done, marker or not.
+  const done = task('done', 'done', 1, { sessionId: 's3', projectId: 'p1', needsAttentionSince: 2000 });
+  const live = new Map([['s3', state({ activity: 'idle', outcome: 'completed' })]]);
+  const sections = buildBoardView([done], live, ALL);
   assert.equal(sections.done[0]?.displayStatus, 'done');
   assert.equal(sections.done[0]?.movedByAgent, false);
   assert.equal(sections.done[0]?.attention, true, 'stored marker is still on the row');
@@ -242,4 +249,43 @@ test('nextLooksDoneTickAt schedules the window crossing and the tooltip minutes,
   // Nothing eligible: no tick at all — the snapshot drives those renders.
   assert.equal(nextLooksDoneTickAt(finishedReview(), state({ activity: 'running' }), at + 4 * 60_000), null);
   assert.equal(nextLooksDoneTickAt(t, null, at + 4 * 60_000), null);
+});
+
+// ---- The auto-done rule's predicate and the host-side visit signal ----
+
+test('autoDoneCandidate gates on Review, visited, a stopped session, and something to check', () => {
+  const base = task('ad', 'review', 1, { worktree: { directory: '/wt', branch: 'wt/a' }, sourceBranch: 'main' });
+  // Unlinked and already seen (no marker — e.g. the user's own drag to Review): a candidate.
+  assert.equal(autoDoneCandidate({ ...base, sessionId: null }, null), true);
+  assert.equal(autoDoneCandidate({ ...base, sessionId: null, needsAttentionSince: 1000 }, null), false, 'unseen waits for a visit');
+  // The host-side visit stands in for the Kanban one: its chat was opened anywhere.
+  const afarSeen = { ...base, sessionId: 's1', needsAttentionSince: 1000 };
+  assert.equal(autoDoneCandidate(afarSeen, state({ activity: 'idle', outcome: 'completed', unread: false })), true);
+  assert.equal(autoDoneCandidate(afarSeen, state({ activity: 'running', unread: false })), false, 'running is never stopped');
+  assert.equal(autoDoneCandidate(afarSeen, state({ activity: 'idle', outcome: 'failed', unread: false })), false, 'a failed turn is a deliberate review');
+  assert.equal(autoDoneCandidate(afarSeen, state({ activity: 'waiting-question', unread: false })), false, 'the agent is mid-question, not done');
+  assert.equal(autoDoneCandidate(afarSeen, null), false, 'linked but no trusted snapshot waits — it might be running');
+  assert.equal(autoDoneCandidate({ ...afarSeen, needsAttentionSince: null }, state({ activity: 'idle', outcome: 'completed' })), true, 'seen here, idle there: candidate');
+  // Nothing to check, however visited: no worktree, no source branch.
+  assert.equal(autoDoneCandidate({ ...base, sessionId: null, worktree: null }, null), false);
+  assert.equal(autoDoneCandidate({ ...base, sessionId: null, sourceBranch: null }, null), false);
+  assert.equal(autoDoneCandidate(task('td', 'todo', 2, { worktree: { directory: '/wt', branch: null }, sourceBranch: 'main' }), null), false);
+});
+
+test('a host-side read (unread false) settles a review row the rail can see, and keeps the ✓ muted', () => {
+  const at = 100_000;
+  const t = finishedReview({ needsAttentionSince: at });
+  const unseen = buildBoardView([t], new Map([['sd', state({ activity: 'idle', outcome: 'completed', unread: true, updatedAt: at })]]), ALL, DEFAULT_SYNC_OPTIONS, QUIET_AT(at));
+  assert.equal(unseen.review[0]?.attention, true);
+  assert.equal(unseen.review[0]?.looksDone, 'hint');
+  assert.equal(countUnseen(unseen), 1);
+  const openedElsewhere = new Map([['sd', state({ activity: 'idle', outcome: 'completed', unread: false, updatedAt: at })]]);
+  const settled = buildBoardView([t], openedElsewhere, ALL, DEFAULT_SYNC_OPTIONS, QUIET_AT(at));
+  assert.equal(settled.review[0]?.attention, false, 'the chat was opened somewhere else: not unseen on display either');
+  assert.equal(settled.review[0]?.attentionSince, null, 'seen rows sink to their rank');
+  assert.equal(settled.review[0]?.looksDone, 'quiet', 'the ✓ mutes exactly the way a local visit mutes it');
+  assert.equal(countUnseen(settled), 0);
+  // A host without the field keeps today's behavior: the marker stands.
+  const oldHost = buildBoardView([t], new Map([['sd', state({ activity: 'idle', outcome: 'completed', unread: null, updatedAt: at })]]), ALL, DEFAULT_SYNC_OPTIONS, QUIET_AT(at));
+  assert.equal(oldHost.review[0]?.attention, true);
 });

@@ -59,7 +59,10 @@ export const createSessionSync = (
     if (snapshot.state !== 'ready') return dropped > 0;
     for (const session of snapshot.sessions) {
       if (session.parentId !== null) continue; // subagent sessions are never a task's chat
-      liveState.set(session.id, { projectId, activity: session.activity, outcome: session.outcome, agent: session.agent ?? null, updatedAt: session.updatedAt });
+      // `unread` (host-side "opened since the last turn") feeds both the
+      // display's seen check and the auto-done visit signal; a host
+      // without the field reads as unknown, never as seen.
+      liveState.set(session.id, { projectId, activity: session.activity, outcome: session.outcome, agent: session.agent ?? null, updatedAt: session.updatedAt, unread: session.unread ?? null });
     }
     return true;
   };

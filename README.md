@@ -37,7 +37,7 @@ A "Project: …" line under the header names the focused project. When no projec
 
 Every task shows the same information on both the page and the panel: its title, its project, and one colored, glyphed pill about the agent — a spinner for running or retrying, ? for "needs your answer", a shield for "needs permission", ! for failed, ✓ for finished — using the same tones as OpenChamber's own badges. Rows that need your review carry the same orange border as on the page, and the badge turns orange while unseen rows wait.
 
-The panel follows agents in real time. If a build agent finishes while the page is closed, the row already sits under Review — the pill carries what the agent is doing and the row's new section carries the move. A session you started elsewhere that comes alive while only the panel is open becomes its card right there too — In Progress while it runs, and, when it runs as the build agent, Review once it needs you — without the full board ever being opened. Two quick actions live on the panel, both always visible at a row's right edge. The small **blue ✓** on every row that is not Done marks the task Done, exactly like the ✓ on the full board's cards — Done is still a human decision everywhere, and the panel never marks anything on its own. Beside it sits a **chat button**: on a card with a linked chat it opens that chat (and clears the orange border, because opening a waiting chat is exactly what being reviewed means); on a card with none it starts a new chat **attached to the card** — its composer is pre-filled with the card's description, or its title when the description is empty, so you review or edit and then press send yourself (the agent only starts at your send) — running in the card's own worktree when it has one — opens it, and links it to the card, without ever moving the card between columns: if the agent starts working, the pill shows it right away, and the board makes the move real the next time you open it. Cards without a project show no chat button. It has no other clicks: no opening, no moving, no quick-add, no deleting, no editing. To do anything else, use the full board from the Extension pages menu — that is the thinking: the panel is for looking at what the agents are up to in the project you have open (and for the fastest mark-done and the fastest way into a card's chat), the page is for doing.
+The panel follows agents in real time. If a build agent finishes while the page is closed, the row already sits under Review — the pill carries what the agent is doing and the row's new section carries the move. A session you started elsewhere that comes alive while only the panel is open becomes its card right there too — In Progress while it runs, and, when it runs as the build agent, Review once it needs you — without the full board ever being opened. Two quick actions live on the panel, both always visible at a row's right edge. The small **blue ✓** on every row that is not Done marks the task Done, exactly like the ✓ on the full board's cards — the panel's ✓ is always your own click, and the panel never moves anything on its own (the board page's review-and-commits rule from the "Done" section is a page write; it lands on the rail as a regrouped row the next time the panel refills). Beside it sits a **chat button**: on a card with a linked chat it opens that chat (and clears the orange border, because opening a waiting chat is exactly what being reviewed means); on a card with none it starts a new chat **attached to the card** — its composer is pre-filled with the card's description, or its title when the description is empty, so you review or edit and then press send yourself (the agent only starts at your send) — running in the card's own worktree when it has one — opens it, and links it to the card, without ever moving the card between columns: if the agent starts working, the pill shows it right away, and the board makes the move real the next time you open it. Cards without a project show no chat button. It has no other clicks: no opening, no moving, no quick-add, no deleting, no editing. To do anything else, use the full board from the Extension pages menu — that is the thinking: the panel is for looking at what the agents are up to in the project you have open (and for the fastest mark-done and the fastest way into a card's chat), the page is for doing.
 
 ### The Review column moves on its own
 
@@ -50,17 +50,28 @@ Some tasks move to the **Review** column by themselves. You do not drag them the
 
 A chat running as any other agent — a plan or discussion session, for instance — never moves its card on its own: its turns, questions included, leave the card exactly where it is, and you move it yourself when there is something to review. Switch that chat to the build agent, and the rule above applies again from that moment on.
 
-A task never moves to **Done** by itself. Only you can mark a task Done.
-
 A task that moved to Review, and you have not opened yet, gets an **orange border** on the left side of the card. This border means: "Look at this one." The newest such task is always at the top of the Review column, above tasks you already saw.
 
-Open the task (click it, or click Edit), and the border goes away.
+Open the task (click it, or click Edit), and the border goes away — and the visit counts even when it happens outside the board: if you walk straight to the chat in OpenChamber (an open anywhere, on any device), the host reports it, the border settles the same way, and the board catches up next time it is open.
 
-### "Looks done" — a suggestion, never a decision
+### Done — your click, or the board's one rule
+
+Most of the time, marking Done stays exactly what it was: your click. A task never moves to **Done** on its own *from the agent's side*. But one deliberate rule lets the board mark a reviewed task Done itself:
+
+- the card sits in **Review** (however it got there),
+- it has been **visited** — opened here, or its chat opened anywhere through OpenChamber,
+- its session has **stopped** (finished quietly or not running at all; a failed turn never counts),
+- and its **worktree carries commits** that are not in the branch the task branched from.
+
+When all of those hold, the board writes Done itself, silently: you reviewed it, the work exists. Dragging the card back out of Done is respected — it stays where you put it until a *new* commit lands. A task with no worktree, or no branch to compare against, keeps the old way: the ✓ below is its only suggestion. And if the session starts running again on a Done card — rework in the same chat — the card comes right back to **In Progress**, whatever agent runs it.
+
+### "Looks done" — a suggestion, mostly replaced by the rule above
 
 When a task sits in Review, its agent has finished, and nothing has happened for about ten minutes — no new turn, no answer requested — a small green **✓** appears next to the ⋯ menu on the card. Its tooltip explains itself: "Looks done · quiet 14m — click to mark Done."
 
-The ✓ is only a suggestion, in the spirit of how OpenChamber itself treats finished sessions: the board never marks a task Done on its own. A click on the ✓ is simply a faster way for you to mark it Done (it stays where it is in the column order). If a new agent turn starts, the ✓ disappears immediately, because the quiet is over. Once you have opened the task, the ✓ turns quiet too: it only appears when you hover the card.
+The ✓ is a suggestion, in the spirit of how OpenChamber itself treats finished sessions. A click on the ✓ is simply a faster way for you to mark it Done (it stays where it is in the column order). If a new agent turn starts, the ✓ disappears immediately, because the quiet is over. Once the task has been seen — here, or anywhere its chat opens — the ✓ turns quiet too: it only appears when you hover the card.
+
+For tasks the auto-done rule cannot qualify (no worktree, no source branch to compare against, a failed turn), the ✓ is the whole suggestion: the board stays out of it, and Done remains your click.
 
 ### Tasks can also appear by themselves
 
@@ -92,7 +103,7 @@ An agent session (an OpenCode chat running in one of the board's projects) can t
 - **Queue a task** — `POST /agent/tasks` with a title, a description, and (recommended) the working directory, which places the task in that project. It lands in Backlog or To Do when the board next applies it — the board page applies queued work on every load (and, while the board is open, within seconds).
 - **Leave a note** — `POST /agent/tasks/<id>/note` puts a text on a task, shown in the task detail's "Agent notes" section. This is the intended **wrap-up report**: what the agent did, which files changed, how to verify.
 
-That is all. There is deliberately no way for an agent to delete, to move a card, or to mark anything **Done** — statuses follow the linked session's state on their own, and Done stays a human decision everywhere on this board. Queued changes wait in a journal on disk (the board page is the only writer of task records and is often closed); acknowledging the journal is the board's job and the agent's token cannot reach it.
+That is all. There is deliberately no way for an agent to delete, to move a card, or to mark anything **Done** through the channel — statuses follow the linked session's state on their own, and Done is written only by the board page itself (your clicks, and the page's own review-and-commits rule from the "Done" section above), never by an agent, never by the rail. Queued changes wait in a journal on disk (the board page is the only writer of task records and is often closed); acknowledging the journal is the board's job and the agent's token cannot reach it.
 
 Agents learn about the channel from the **skill**: install it once with
 

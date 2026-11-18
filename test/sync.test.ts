@@ -2,9 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { statusForSession } from '../src/domain/sync.ts';
 
-test('a task marked Done is never moved, regardless of activity or agent', () => {
+test('a Done card reverts to In Progress when its linked session runs again, whatever the agent', () => {
   for (const agent of ['build', 'plan', null]) {
-    for (const activity of ['running', 'retrying', 'waiting-question', 'waiting-permission', 'idle'] as const) {
+    for (const activity of ['running', 'retrying'] as const) {
+      assert.equal(statusForSession('done', activity, 'completed', agent), 'in_progress');
+    }
+  }
+});
+
+test('a Done card holds against every non-running snapshot — waiting, idle, unknown — and never lands back in Review', () => {
+  for (const agent of ['build', 'plan', null]) {
+    for (const activity of ['waiting-question', 'waiting-permission', 'idle', 'unknown'] as const) {
       assert.equal(statusForSession('done', activity, 'completed', agent), null);
       assert.equal(statusForSession('done', activity, 'failed', agent), null);
     }

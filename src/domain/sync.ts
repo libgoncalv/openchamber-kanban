@@ -40,19 +40,27 @@ export const reviewEligibleAgent = (agent: SessionAgent): boolean => {
 
 /**
  * Maps a linked session's live state to the task status it implies, or
- * `null` when nothing should change. A task the user marked Done is never
- * moved by this: Done stays a deliberate, user-only action (see board
- * requirements — an agent finishing a turn must not mark a task Done).
+ * `null` when nothing should change.
  *
  * Rules (as directed): the agent actively working moves the task to
- * In Progress from anywhere, whatever agent the session runs as; the agent
- * finishing, asking a question, or (per `options`) hitting a permission
- * prompt or a failure moves it to Review, so the user notices without the
- * agent ever claiming "done" itself — but only when the session runs as
- * the build agent (`reviewEligibleAgent`): a plan or discussion session's
- * turn, a question included, leaves the card where it ran, and the user
- * moves it themselves. The gate blocks only the move into Review; a card
- * already there stays there, and Done of course never moves either way.
+ * In Progress from anywhere — Done included, so rework in the same session
+ * pulls the card back out of Done, whatever agent the session runs as; the
+ * agent finishing, asking a question, or (per `options`) hitting a
+ * permission prompt or a failure moves it to Review, so the user notices
+ * without the agent ever claiming "done" itself — but only when the session
+ * runs as the build agent (`reviewEligibleAgent`): a plan or discussion
+ * session's turn, a question included, leaves the card where it ran, and
+ * the user moves it themselves. The gate blocks only the move into Review;
+ * a card already there stays there.
+ *
+ * Done is deliberately one-way in the other moves: only a *running* session
+ * ever lifts a card out of Done (the rework pull-back above). A waiting or
+ * idle snapshot never rewrote Done — the board's auto-done rule
+ * (`autoDoneReady` in `boardView.ts`) is the only other writer of Done, and
+ * it is the user's own observed read plus commits, not the session's
+ * outcome. Before the pull-back existed this mapping refused to touch Done
+ * at all; that refusal now covers exactly the paths that would land the
+ * card back in Review.
  *
  * `agent` is the linked session record's field as the snapshot carries it
  * (`session.agent ?? null` — see `sessionSync.ts` and `autoTask.ts`).
@@ -64,8 +72,8 @@ export const statusForSession = (
   agent: SessionAgent,
   options: SyncOptions = DEFAULT_SYNC_OPTIONS,
 ): TaskStatus | null => {
-  if (current === 'done') return null;
   const toReview = (): TaskStatus | null => {
+    if (current === 'done') return null;
     if (!reviewEligibleAgent(agent)) return null;
     return current === 'review' ? null : 'review';
   };

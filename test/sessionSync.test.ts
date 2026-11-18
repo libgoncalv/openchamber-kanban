@@ -62,14 +62,19 @@ test('dropping the last task for a project releases its subscription', async () 
   assert.deepEqual(unsubscribed, ['p1']);
 });
 
-test('a done task does not get moved even while its session keeps running', async () => {
+test('rework in a done task\'s linked session pulls the card back to In Progress', async () => {
   const { host, push } = fakeHost();
-  const changes: unknown[] = [];
-  const sync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, (...args) => changes.push(args));
+  const changes: Array<[string, string]> = [];
+  const sync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, (id, status) => changes.push([id, status]));
   const task = { ...createTask({ title: 't', projectId: 'p1', status: 'done' as const }, 1), sessionId: 'ses_1' };
   sync.sync([task]);
   await Promise.resolve();
   push('p1', snapshot('p1', [session('ses_1', 'running')]));
+  assert.deepEqual(changes, [[task.id, 'in_progress']]);
+  // The other moves stay blocked: a done card never lands back in Review.
+  changes.length = 0;
+  push('p1', snapshot('p1', [session('ses_1', 'idle', 'completed')]));
+  push('p1', snapshot('p1', [session('ses_1', 'waiting-question')]));
   assert.deepEqual(changes, []);
 });
 

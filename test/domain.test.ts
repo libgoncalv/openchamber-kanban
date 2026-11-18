@@ -38,6 +38,18 @@ test('parseTask treats a record saved before needsAttentionSince existed as null
   assert.throws(() => parseTask({ ...good, needsAttentionSince: 'soon' }), /needsAttentionSince/);
 });
 
+test('autoDoneCommit follows the same optional-field convention as needsAttentionSince', () => {
+  const good = createTask({ title: 'guarded' }, 1, 1);
+  assert.equal(good.autoDoneCommit, null, 'fresh tasks carry no guard');
+  const { autoDoneCommit, ...withoutField } = good;
+  assert.equal(parseTask(withoutField).autoDoneCommit, null, 'records saved before the field existed parse as null');
+  assert.equal(parseTask({ ...good, autoDoneCommit: 'abc123' }).autoDoneCommit, 'abc123');
+  assert.throws(() => parseTask({ ...good, autoDoneCommit: { not: 'a string' } }), /autoDoneCommit/);
+  const patched = applyPatch(good, { autoDoneCommit: 'sha999' });
+  assert.equal(patched.autoDoneCommit, 'sha999');
+  assert.equal(applyPatch(patched, { autoDoneCommit: null }).autoDoneCommit, null);
+});
+
 test('applyPatch sets and clears needsAttentionSince', () => {
   const task = createTask({ title: 'a' }, 1, 100);
   assert.equal(applyPatch(task, { needsAttentionSince: 500 }).needsAttentionSince, 500);

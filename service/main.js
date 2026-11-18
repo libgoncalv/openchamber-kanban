@@ -587,6 +587,7 @@ var createAgentTaskRoutes = ({ store, notifyChange }) => {
 
 // src/service/server.ts
 var BODY_MAX = 131072;
+var COMMIT_BASE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 var readBody = (req) => new Promise((resolve) => {
   let size = 0;
   const parts = [];
@@ -665,6 +666,31 @@ var createServiceServer = ({ token: token2, git: git2, transcriber, agent: agent
             return;
           }
           json(res, 200, { branches: parseGitRefOutput(result.stdout) });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/commits-ahead") {
+          const directory = url.searchParams.get("directory") ?? "";
+          const base = url.searchParams.get("base") ?? "";
+          if (!path.isAbsolute(directory) || !COMMIT_BASE_PATTERN.test(base) || base.includes("..")) {
+            json(res, 400, { error: "bad-request" });
+            return;
+          }
+          const count = await git2(directory, ["rev-list", "--count", `${base}..HEAD`]);
+          if (!count.ok) {
+            json(res, count.status, { error: count.error });
+            return;
+          }
+          const head = await git2(directory, ["rev-parse", "HEAD"]);
+          if (!head.ok) {
+            json(res, head.status, { error: head.error });
+            return;
+          }
+          const ahead = Number.parseInt(count.stdout.trim(), 10);
+          if (!Number.isInteger(ahead) || ahead < 0) {
+            json(res, 500, { error: "unparseable rev-list output" });
+            return;
+          }
+          json(res, 200, { ahead, head: head.stdout.trim() || null });
           return;
         }
         if (url.pathname.startsWith("/transcribe")) {

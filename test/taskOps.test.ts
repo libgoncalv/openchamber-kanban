@@ -12,6 +12,7 @@ import {
   planMove,
   saveMove,
   statusMove,
+  autoDoneMove,
 } from '../src/store/taskOps.ts';
 
 /** In-memory stand-in for host.storage, with optional failure injection per operation. */
@@ -89,6 +90,21 @@ test('statusMove keeps rank, clears the marker, and is null when nothing changes
   assert.equal(cleared.needsAttentionSince, null);
   const calm = task('calm', 1, 'review');
   assert.equal(statusMove(calm, 'review'), null, 'same column with no marker is a no-op');
+});
+
+test('autoDoneMove writes Done with the guard hash, kept rank, and only ever from Review', () => {
+  const t = task('t', 1024, 'review', { needsAttentionSince: 9 });
+  const done = autoDoneMove(t, 'abc123')!;
+  assert.equal(done.status, 'done');
+  assert.equal(done.rank, 1024, 'auto-done keeps its rank like every other move');
+  assert.equal(done.needsAttentionSince, null);
+  assert.equal(done.autoDoneCommit, 'abc123', 'the guard records the HEAD that fired');
+  assert.equal(autoDoneMove(done, 'abc123'), null, 'Done itself is never re-written');
+  assert.equal(autoDoneMove(task('todo', 1, 'todo', { needsAttentionSince: null }), 'abc123'), null);
+  // A record saved before the field existed round-trips as null (the marker convention).
+  const legacy = task('legacy', 1, 'review');
+  const revived = autoDoneMove(legacy, 'sha1')!;
+  assert.equal(revived.autoDoneCommit, 'sha1');
 });
 
 test('patchTask applies a patch; unknown ids return null', () => {

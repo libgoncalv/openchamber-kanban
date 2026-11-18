@@ -55,6 +55,15 @@ export type Task = {
    * the agent: the board is the only writer, same as every other field.
    */
   agentNotes?: AgentNote[];
+  /**
+   * The commit hash in the task's worktree when the board's auto-done rule
+   * wrote Done itself (see `boardView.ts`). Re-firing stays a no-op as long
+   * as the worktree's HEAD matches this: dragging the card back out of Done
+   * holds until a newer commit actually lands. Absent (`null`) on tasks the
+   * rule never fired for, exactly like a record saved before this field
+   * existed.
+   */
+  autoDoneCommit: string | null;
 };
 
 export type TaskDraft = {
@@ -66,7 +75,7 @@ export type TaskDraft = {
 };
 
 export type TaskPatch = Partial<
-  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes'>
+  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes' | 'autoDoneCommit'>
 >;
 
 export const isStatus = (value: unknown): value is TaskStatus =>
@@ -185,6 +194,7 @@ export const createTask = (draft: TaskDraft, rank: number, now = Date.now(), id 
   createdAt: now,
   updatedAt: now,
   needsAttentionSince: null,
+  autoDoneCommit: null,
 });
 
 export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task => {
@@ -204,6 +214,7 @@ export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task
     next.rank = patch.rank;
   }
   if ('needsAttentionSince' in patch) next.needsAttentionSince = optionalTimestamp(patch.needsAttentionSince, 'needsAttentionSince');
+  if ('autoDoneCommit' in patch) next.autoDoneCommit = optionalRef(patch.autoDoneCommit, 'autoDoneCommit');
   if ('agentNotes' in patch) {
     const notes = cleanAgentNotes(patch.agentNotes);
     if (notes !== undefined) next.agentNotes = notes;
@@ -234,6 +245,7 @@ export const parseTask = (value: unknown): Task => {
     createdAt: cleanTimestamp(record.createdAt, 'createdAt'),
     updatedAt: cleanTimestamp(record.updatedAt, 'updatedAt'),
     needsAttentionSince: optionalTimestamp(record.needsAttentionSince, 'needsAttentionSince'),
+    autoDoneCommit: optionalRef(record.autoDoneCommit, 'autoDoneCommit'),
     ...cleanAgentNotesOptional(record.agentNotes),
   };
 };
