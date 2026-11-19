@@ -18,8 +18,8 @@ All your data stays on your own OpenChamber server. This extension does not send
 - Start a session from a task on this board, and it stays linked to that task. It does not create another task. Start a session from the OpenChamber sidebar, and the board can add a new task for it automatically, as described below.
 - Delete a session in the OpenChamber sidebar — the linked task is deleted automatically. Archive a session, or delete a worktree — the corresponding link is cleared and the task stays on the board. You can start a new agent for it, or link another session.
 - Move a task to any column three ways: drag the card, the ⋯ menu on it, or open the task and click the status you want in its Status strip. One click for every column, and the click moves immediately — the same deliberate move the other two make. The ⋯ menu exists on every card on the page.
-- A card that sits in **Done** for two weeks moves itself to the **Archive** column, no click needed. You can also archive a card yourself the same three ways, drag an archived card back out whenever it matters again, and empty the whole column with its head trash like any other column.
-- Each column carries its theme accent — gray Backlog, a held-back blue To Do, the same blue at full strength In Progress, amber Review, green Done, muted gray Archive — as a small strip above the header and the count's tint. The blue family is one color at two strengths (planned vs working); the color is display language on the column head only: cards keep their own (the agent pill, the amber unseen border).
+- A card that sits in **Done** for two weeks retires itself to the **Archive**, no click needed — Archive shows on no board; the page's toolbar carries an **Archive button** (with a live count) that opens the list of retired cards, where you can restore, delete, or empty it. You can also archive a card yourself early: the ⋯ menu, the selection bar's Move-to, or the task's Status strip.
+- Each column carries its theme accent — gray Backlog, a held-back blue To Do, the same blue at full strength In Progress, amber Review, green Done — as a small strip above the header and the count's tint. The blue family is one color at two strengths (planned vs working); the color is display language on the column head only: cards keep their own (the agent pill, the amber unseen border).
 - The board also speaks **to agents**: an agent session in one of the board's projects can read the tasks and queue two things — a new task (Backlog or To Do) and a **note** on a task it worked on. See "The agent channel" below.
 
 
@@ -32,7 +32,7 @@ All your data stays on your own OpenChamber server. This extension does not send
 
 ### The sidebar panel: the project at a glance
 
-The narrow Kanban panel next to your session list shows the same board laid out for a narrow column, locked to the project OpenChamber currently has open. The five live columns appear stacked from top to bottom, each header showing its count and carrying its column's colored strip. The page's Archive column stays out of the panel: a card the board retires simply leaves the panel at that moment (the full board — one pull wider on a desktop — carries it). On the full page the scope is a filter you can change; here it follows the open project.
+The narrow Kanban panel next to your session list shows the same board laid out for a narrow column, locked to the project OpenChamber currently has open. The five live columns appear stacked from top to bottom, each header showing its count and carrying its column's colored strip. Retired work shows on no board: a card the board retires simply leaves, and the page's toolbar (the expanded panel shares it) carries the Archive button that opens the retired list. On the full page the scope is a filter you can change; here it follows the open project.
 
 A "Project: …" line under the header names the focused project. When no project is open, every task shows, with the project named on each row.
 
@@ -66,13 +66,13 @@ Most of the time, marking Done stays exactly what it was: your click. A task nev
 
 When all of those hold, the board writes Done itself, silently: you reviewed it, the work exists. Dragging the card back out of Done is respected — it stays where you put it until a *newer* commit lands in the project. A card without a session anchor keeps the old way: the ✓ below is its only suggestion. Unlinking the session retires the anchor too — the evidence belongs to that chat. And if the session starts running again on a Done card — rework in the same chat — the card comes right back to **In Progress**, whatever agent runs it.
 
-### Archive — the column that fills itself
+### Archive — the door to the retired list
 
-A card that sits in **Done** for two weeks the board retires on its own: it moves to the **Archive** column, sixth on the board, with no click. The clock started when the card entered Done; rework pulled it back out and it landed in Done again? The two weeks count again, from the fresh entry. A reworked *archived* card behaves like a reworked Done card too — a running session pulls it back to In Progress, and only you drag it back, or the fresh Done stretch ages into Archive again.
+A card that sits in **Done** for two weeks the board retires on its own, with no click: it leaves every board. The page's toolbar carries an **Archive button** (with a live count that never misses a crossing, thanks to the board's timer) and opens the archive dialog: the retired cards, oldest first, with three moves. Tap a card to open its detail — edit, session link, any move, notes. A quick **Restore** returns it to Done; the two-week clock restarts, so a card you still value gets its window again. A two-press **Delete** removes it, and the header's **Empty** purges the whole list with the same armed, second-press confirm. The clock started when the card entered Done; rework pulled it back out and it landed in Done again? The two weeks count again, from the fresh entry. A reworked *archived* card behaves like a reworked Done card too — a running session pulls it back to In Progress, and only you put it back, or the fresh Done stretch ages into Archive again.
 
 The rail panel carries none of it: the moment a card turns two weeks done it simply leaves the panel (the rail never writes on its own; the page persists the move when it is open — on load, or at the exact crossing instant on an open board). Old Done cards from before the clock existed count theirs from their last change and settle in on the next load of the board.
 
-You can also archive a card yourself — drag it into Archive, the ⋯ menu, the selection bar's Move-to, the Status strip. Dragging an archived card back out is always yours to do, and the Archive column's head trash empties it the same way every column's does. The "N open" badge counts none of it: Done and Archive are not open work.
+You can also archive a card yourself before the two weeks pass — the ⋯ menu, the selection bar's Move-to, the Status strip. The "N open" badge counts none of it: Done and Archive are not open work.
 
 ### "Looks done" — a suggestion, mostly replaced by the rule above
 

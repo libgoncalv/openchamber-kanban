@@ -81,6 +81,28 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 .kb-dialog-close svg{width:13px;height:13px;display:block}
 .kb-dialog-close:hover{color:var(--oc-fg);background:var(--oc-hover)}
 .kb-dialog-close:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+/* The archive dialog (the toolbar's Archive button opens it): the same
+   kb-dialog shell the detail popup mounts, one list inside — the retired
+   work the hidden Archive column would have shown, oldest first. */
+.kb-archive-head{align-items:center}
+.kb-archive-title{font-size:17px;font-weight:600;letter-spacing:-.01em;display:inline-flex;align-items:center;gap:8px}
+.kb-dialog-count{font:11px var(--oc-mono);color:var(--oc-muted);background:color-mix(in srgb,var(--oc-muted) 14%,transparent);padding:1px 7px;border-radius:9999px}
+.kb-archive-list{display:flex;flex-direction:column;gap:8px;overflow-y:auto;flex:1}
+.kb-archive-row{background:var(--oc-elevated);color:var(--oc-elevated-fg);border:1px solid var(--oc-border);border-radius:9px;padding:10px 12px;display:flex;align-items:center;gap:10px;cursor:pointer}
+.kb-archive-row:hover{border-color:var(--oc-hover)}
+.kb-archive-row:focus-visible{outline:2px solid var(--oc-focus,var(--oc-primary));outline-offset:-2px}
+.kb-archive-main{flex:1;min-width:0}
+.kb-archive-meta{margin-top:3px;font-size:11px;color:var(--oc-muted);display:flex;gap:7px;align-items:center;overflow-wrap:anywhere}
+.kb-archive-when{font-family:var(--oc-mono)}
+.kb-archive-row .kb-iconbtn{width:24px;height:24px}
+.kb-iconbtn[data-armed="true"]{background:var(--oc-error,var(--status-error,#e5484d));border-color:transparent;color:#fff}
+.kb-archive-empty{font-size:12px;color:var(--oc-muted);padding:12px 2px;text-align:center}
+.kb-archive-foot{font:10px var(--oc-mono);color:var(--oc-muted);text-align:center}
+/* The toolbar's Archive button rides the selection bar's plain-button idiom
+   at toolbar scale: glyph, live count, label. */
+.kb-tb-archive{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 10px;font-size:12px}
+.kb-tb-archive svg{width:13px;height:13px;display:block}
+.kb-tb-archive .kb-tb-count{font:11px var(--oc-mono);color:var(--oc-muted);background:color-mix(in srgb,var(--oc-muted) 14%,transparent);padding:0 6px;border-radius:9999px}
 /* The task-body Delete button, always red (the kit's destructive) like the
    board's own danger buttons; the first, arming press fills it until the
    confirming press — the same escalation the selection bar's Delete gets. */

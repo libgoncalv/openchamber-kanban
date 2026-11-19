@@ -27,6 +27,7 @@ import { ackPendingEntries, fetchPendingEntries, pushMirror } from '../host/agen
 import { mountTaskDetail } from './detail.ts';
 import { createDictation } from '../host/dictation.ts';
 import { mountKanbanView } from './kanbanView.ts';
+import { mountArchiveDialog, type ArchiveDialog } from './archiveDialog.ts';
 import { injectStyles } from './styles.ts';
 import { el } from './dom.ts';
 
@@ -78,11 +79,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   // Toolbar icon buttons — the kb-iconbtn idiom drawn at toolbar scale: the
   // reload above the board and the primary plus. `reload()` drives the
   // reload's spin so a snapshot- or interval-triggered reload shows too.
-  const toolbarIcon = (paths: string[], label: string) => {
-    const button = el('button', 'kb-iconbtn kb-tb-iconbtn');
-    button.type = 'button';
-    button.title = label;
-    button.setAttribute('aria-label', label);
+  /** A small stroke-glyph svg, shared by the toolbar icons and the Archive button. */
+  const strokeSvgNode = (paths: string[]) => {
     const node = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     node.setAttribute('viewBox', '0 0 24 24');
     node.setAttribute('fill', 'none');
@@ -96,9 +94,30 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       shape.setAttribute('d', d);
       node.append(shape);
     }
-    button.append(node);
+    return node;
+  };
+  const toolbarIcon = (paths: string[], label: string) => {
+    const button = el('button', 'kb-iconbtn kb-tb-iconbtn');
+    button.type = 'button';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.append(strokeSvgNode(paths));
     return button;
   };
+  // The Archive button sits with the toolbar icons: the one door to retired
+  // work, now that both boards render live columns only. Its glyph carries
+  // a live count — `render()` stamps it from the same view sections the
+  // columns read, and the tick keeps it correct at every two-week crossing.
+  const archiveButton = el('button', 'kb-bar-btn kb-tb-archive');
+  archiveButton.type = 'button';
+  archiveButton.title = 'Archive';
+  archiveButton.setAttribute('aria-label', 'Archive');
+  const archiveCount = el('span', 'kb-tb-count');
+  archiveCount.hidden = true;
+  archiveButton.append(strokeSvgNode(['M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 11h6']));
+  archiveButton.append(archiveCount, document.createTextNode('Archive'));
+  archiveButton.addEventListener('click', () => openArchiveDialog());
+  toolbar.append(archiveButton);
   const reloadButton = toolbarIcon(['M23 4v6h-6', 'M20.49 15a9 9 0 1 1-2.12-9.36L23 10'], 'Refresh');
   reloadButton.addEventListener('click', () => { void reload(); });
   toolbar.append(reloadButton);
@@ -761,6 +780,38 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     void deleteTasksForIds(list);
   };
 
+  /**
+   * The archive dialog: the one door to the board's retired work, opened by
+   * the toolbar's Archive button. Opening it closes the detail popup first,
+   * so the two never stack; its list re-reads on every board render (the
+   * tick keeps it watching the two-week crossings), and every write routes
+   * through exactly the helpers the board's own actions use — the restore
+   * is the ⋯ menu's kept-rank move (to Done, a fresh two weeks), the delete
+   * the shared dismissal protocol, the purge the old column head's batch.
+   */
+  let archiveDialog: ArchiveDialog | null = null;
+  const closeArchiveDialog = () => {
+    archiveDialog?.dispose();
+    archiveDialog = null;
+  };
+  const openArchiveDialog = () => {
+    if (disposed || archiveDialog) return;
+    closeDetail();
+    archiveDialog = mountArchiveDialog(root, {
+      getItems: () => currentSections?.archived ?? [],
+      projectName: (task) => (task.projectId ? projects.find((p) => p.id === task.projectId)?.name ?? task.projectId : null),
+      scopeLabel: filter.projectId === ALL_PROJECTS
+        ? 'All projects'
+        : (projects.find((p) => p.id === filter.projectId)?.name ?? 'this project'),
+      onRestore: (task) => { void moveTaskByMenu(task, 'done'); },
+      onDelete: (task) => { void deleteTaskForTask(task); },
+      onPurge: (list) => { void deleteTasksForIds(list); },
+      onOpenDetail: (task) => { closeArchiveDialog(); openDetail(task.id); },
+      onClose: closeArchiveDialog,
+    });
+    archiveDialog.refresh();
+  };
+
   const resetDeleteButton = () => {
     deleteArmed = false;
     deleteButton.textContent = 'Delete';
@@ -781,7 +832,10 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
    */
   const onSelectionKeydown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
-    if (detail) return;
+    // A modal dialog owns Escape first, being modal and trapping focus —
+    // the archive dialog closes itself; the detail popup's own handler
+    // stands in front of this one's query at press time.
+    if (detail || archiveDialog) return;
     if (selected.size === 0 && emptyArmed === null) return;
     selected.clear();
     resetDeleteButton();
@@ -798,6 +852,18 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     const unseen = countUnseen(sections);
     const counts = badgeForCounts(open, unseen);
     badge.update({ label: counts.label, tone: counts.tone });
+  };
+
+  /** The Archive button's live count and title, from the same view sections the columns read. */
+  const updateArchiveButton = (sections: BoardSections) => {
+    const count = sections.archived.length;
+    archiveCount.textContent = count > 0 ? String(count) : '';
+    archiveCount.hidden = count === 0;
+    const tip = count === 0
+      ? 'Archive'
+      : `Archive — ${count === 1 ? '1 task' : `${count} tasks`} retired`;
+    archiveButton.title = tip;
+    archiveButton.setAttribute('aria-label', tip);
   };
 
   /**
@@ -843,7 +909,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     const sections = buildBoardView(tasks, sessionSync.live(), filter);
     currentSections = sections;
     updateBadge(sections);
+    updateArchiveButton(sections);
     board.render(sections);
+    archiveDialog?.refresh();
     scheduleTimeTick();
   };
 
@@ -1203,6 +1271,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     dispose: () => {
       disposed = true;
       clearTimeTick();
+      closeArchiveDialog();
       if (mirrorTimer !== null) { clearTimeout(mirrorTimer); mirrorTimer = null; }
       if (agentPullTimer !== null) { clearTimeout(agentPullTimer); agentPullTimer = null; }
       stopAgentEvents();

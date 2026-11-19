@@ -8,10 +8,11 @@ import { el } from './dom.ts';
 
 /**
  * The one renderer behind both surfaces. The full-screen page mounts it in
- * `page` mode: six columns side by side, cards, a tap opens the task's
- * detail view. The rail panel mounts it in `rail` mode: the five live views
- * stacked as sections, slim rows — the Archive section is the full board's
- * alone there, so a card the archive rule retires simply leaves the panel.
+ * `page` mode: five columns side by side, cards, a tap opens the task's
+ * detail view — Archive is retired behind the toolbar's Archive dialog on
+ * both modes (its loop skip below). The rail panel mounts it in `rail`
+ * mode: the same five sections stacked as sections, slim rows, so a card
+ * the archive rule retires simply leaves the panel.
  * Every interactive affordance — the primary
  * tap, the ✓ mark-done shortcut, the rail's chat button, the ⋯ menu, dragging,
  * folding, selection, column cleanup — renders only when the surface supplies
@@ -405,13 +406,13 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     for (const handle of menuHandles.splice(0)) handle.dispose();
     container.replaceChildren();
     for (const status of STATUSES) {
-      // The rail's one full-layout cut: Archive never renders there. The
-      // mirror is "what the agents are up to" — a card the archive rule
-      // retires simply leaves the panel at its two-week boundary; the full
-      // board (the page, or the expanded panel on a desktop, which is that
-      // page's factory) carries the column. The counts were already blind
-      // to it (`countOpen`/`countUnseen` exclude `archived`).
-      if (rail && status === 'archived') continue;
+      // The archived section never renders as a column or as a rail section:
+      // retired work leaves both boards, and the toolbar's Archive dialog on
+      // the page (the expanded panel shares the factory) is the one door
+      // back. Manual moves to archived still exist through the ⋯ menu, the
+      // selection bar, and the detail strip; the count in the door's button
+      // keeps the retired work findable.
+      if (status === 'archived') continue;
       container.append(rail ? renderSection(status, sections[status]) : renderColumn(status, sections[status]));
     }
   };
