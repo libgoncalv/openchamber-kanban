@@ -9,8 +9,10 @@ import { el } from './dom.ts';
 /**
  * The one renderer behind both surfaces. The full-screen page mounts it in
  * `page` mode: six columns side by side, cards, a tap opens the task's
- * detail view. The rail panel mounts it in `rail` mode: the same views
- * stacked as sections, slim rows. Every interactive affordance — the primary
+ * detail view. The rail panel mounts it in `rail` mode: the five live views
+ * stacked as sections, slim rows — the Archive section is the full board's
+ * alone there, so a card the archive rule retires simply leaves the panel.
+ * Every interactive affordance — the primary
  * tap, the ✓ mark-done shortcut, the rail's chat button, the ⋯ menu, dragging,
  * folding, selection, column cleanup — renders only when the surface supplies
  * the matching handler, so a surface that passes none renders the identical
@@ -403,6 +405,13 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     for (const handle of menuHandles.splice(0)) handle.dispose();
     container.replaceChildren();
     for (const status of STATUSES) {
+      // The rail's one full-layout cut: Archive never renders there. The
+      // mirror is "what the agents are up to" — a card the archive rule
+      // retires simply leaves the panel at its two-week boundary; the full
+      // board (the page, or the expanded panel on a desktop, which is that
+      // page's factory) carries the column. The counts were already blind
+      // to it (`countOpen`/`countUnseen` exclude `archived`).
+      if (rail && status === 'archived') continue;
       container.append(rail ? renderSection(status, sections[status]) : renderColumn(status, sections[status]));
     }
   };
