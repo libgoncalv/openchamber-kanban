@@ -80,3 +80,20 @@ test('an unknown activity never moves the task', () => {
   assert.equal(statusForSession('todo', 'unknown', null, 'build'), null);
   assert.equal(statusForSession('todo', 'unknown', null, null), null);
 });
+
+test('an archived card answers to exactly the signals a Done card does', () => {
+  // The rework pull-back lifts it out, whatever the agent — work resumed.
+  for (const agent of ['build', 'plan', null]) {
+    for (const activity of ['running', 'retrying'] as const) {
+      assert.equal(statusForSession('archived', activity, 'completed', agent), 'in_progress');
+    }
+  }
+  // Every non-running snapshot holds it: a linked session finishing again,
+  // however long ago, never drags a retired card back out of Archive.
+  for (const agent of ['build', 'plan', null]) {
+    for (const activity of ['waiting-question', 'waiting-permission', 'idle', 'unknown'] as const) {
+      assert.equal(statusForSession('archived', activity, 'completed', agent), null);
+      assert.equal(statusForSession('archived', activity, 'failed', agent), null);
+    }
+  }
+});

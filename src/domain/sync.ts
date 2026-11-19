@@ -43,9 +43,10 @@ export const reviewEligibleAgent = (agent: SessionAgent): boolean => {
  * `null` when nothing should change.
  *
  * Rules (as directed): the agent actively working moves the task to
- * In Progress from anywhere — Done included, so rework in the same session
- * pulls the card back out of Done, whatever agent the session runs as; the
- * agent finishing, asking a question, or (per `options`) hitting a
+ * In Progress from anywhere — Done and Archive included, so rework in the
+ * same session pulls the card back out, whatever agent the session runs as
+ * (and re-entering Done after the rework starts the archive window fresh);
+ * the agent finishing, asking a question, or (per `options`) hitting a
  * permission prompt or a failure moves it to Review, so the user notices
  * without the agent ever claiming "done" itself — but only when the session
  * runs as the build agent (`reviewEligibleAgent`): a plan or discussion
@@ -58,9 +59,12 @@ export const reviewEligibleAgent = (agent: SessionAgent): boolean => {
  * idle snapshot never rewrote Done — the board's auto-done rule
  * (`autoDoneReady` in `boardView.ts`) is the only other writer of Done, and
  * it is the user's own observed read plus commits, not the session's
- * outcome. Before the pull-back existed this mapping refused to touch Done
- * at all; that refusal now covers exactly the paths that would land the
- * card back in Review.
+ * outcome. Archived holds the same way, one step further retired: a linked
+ * session finishing again must not drag a two-week-old card back out of the
+ * Archive column, and the user's own click is the only way back. Before the
+ * pull-back existed this mapping refused to touch Done at all; that
+ * refusal now covers exactly the paths that would land the card back in
+ * Review.
  *
  * `agent` is the linked session record's field as the snapshot carries it
  * (`session.agent ?? null` — see `sessionSync.ts` and `autoTask.ts`).
@@ -73,7 +77,7 @@ export const statusForSession = (
   options: SyncOptions = DEFAULT_SYNC_OPTIONS,
 ): TaskStatus | null => {
   const toReview = (): TaskStatus | null => {
-    if (current === 'done') return null;
+    if (current === 'done' || current === 'archived') return null;
     if (!reviewEligibleAgent(agent)) return null;
     return current === 'review' ? null : 'review';
   };

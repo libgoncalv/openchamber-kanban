@@ -104,3 +104,44 @@ export const planStatusMoves = (
   });
   return changed.length > 0 ? { next, changed } : null;
 };
+
+/**
+ * How long a card stays in Done before the board moves it to the archive
+ * column: fourteen days from the moment it entered Done (`doneAt`, stamped
+ * by `applyPatch`), fresh after every rework cycle.
+ */
+export const ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * The archive rule's clock anchor: when the card entered Done, recorded as
+ * `doneAt` by every write path. A record saved before the field existed
+ * falls back to its `updatedAt` — the last change it carries — until the
+ * board's next load backfills it with that same value.
+ */
+export const doneAnchor = (task: Task): number => task.doneAt ?? task.updatedAt;
+
+/**
+ * The ids of done cards the archive rule would move right now: stored `done`
+ * (an archived card never re-fires; a live rework pull-back has already left
+ * Done) whose anchor sits `ARCHIVE_AFTER_MS` back or more. Pure — the page
+ * passes its own list on load and at each card's crossing instant; the rail
+ * never writes and derives the same regroup for display (`buildBoardItem`
+ * in `boardView.ts`).
+ */
+export const archiveCandidates = (tasks: readonly Task[], now: number): string[] =>
+  tasks
+    .filter((task) => task.status === 'done' && now - doneAnchor(task) >= ARCHIVE_AFTER_MS)
+    .map((task) => task.id);
+
+/**
+ * The next instant at which one task's archive crossing alone changes the
+ * board — `doneAt` plus the window, while it is still ahead. `null` when the
+ * task is not done, or the crossing already passed (the load-time sweep owns
+ * the already-due set). The page keeps this timer beside the looks-done tick
+ * and runs the sweep when it fires.
+ */
+export const nextArchiveTickAt = (task: Task, now: number): number | null => {
+  if (task.status !== 'done') return null;
+  const crossing = doneAnchor(task) + ARCHIVE_AFTER_MS;
+  return crossing > now ? crossing : null;
+};

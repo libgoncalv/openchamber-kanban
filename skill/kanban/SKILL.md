@@ -6,11 +6,12 @@ description: Read the OpenChamber Kanban board from an agent — list its tasks,
 # The OpenChamber Kanban board
 
 The user's OpenChamber has a Kanban board extension (columns: Backlog, To Do,
-In Progress, Review, Done). A task can be linked to a real agent session; when
-that session finishes, asks a question, or needs permission, the task moves to
-**Review** on its own — never to Done. Agents use the board through the
-extension's local service: a small HTTP API on this machine, authenticated
-with a token the extension wrote to a file.
+In Progress, Review, Done, and after Done the **Archive** — where the board
+itself retires Done cards two weeks old). A task can be linked to a real agent
+session; when that session finishes, asks a question, or needs permission, the
+task moves to **Review** on its own — never to Done. Agents use the board
+through the extension's local service: a small HTTP API on this machine,
+authenticated with a token the extension wrote to a file.
 
 Load this skill when the user mentions the board, its cards or tasks, when you
 are working on a task that came from it, or when you split work into pieces.
@@ -80,6 +81,11 @@ see below.
 - **Never try to mark Done.** There is no route for it: Done is the user's
   decision, and Review happens automatically through your session's state.
   Do not ask for a status change; finish your turn and the card moves itself.
+- **Leave Archive alone.** An archived card is a Done card two weeks old that
+  the board retired on its own; no agent ever writes that status and no session
+  state drags it back — only the user does. If such a card's session runs
+  again, the card comes back to In Progress by itself; work normally from
+  there.
 - **A task's status is its session's state**, not yours to track. Work on the
   task your session is linked to; the board follows on its own.
 - **Break work down early.** For a task with clear subtasks, queue one card

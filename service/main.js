@@ -358,6 +358,9 @@ var TITLE_MAX = 200;
 var DESCRIPTION_MAX = 16e3;
 var AGENT_NOTE_MAX = 2e3;
 
+// src/domain/board.ts
+var ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1e3;
+
 // src/domain/agentChannel.ts
 var AGENT_CHANNEL_VERSION = 1;
 var AGENT_JOURNAL_MAX = 200;

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPatch, createTask, newTaskId, parseTask, type Task } from '../src/domain/task.ts';
-import { planDrop, planStatusMoves, rankAtEnd } from '../src/domain/board.ts';
+import { ARCHIVE_AFTER_MS, archiveCandidates, nextArchiveTickAt, planDrop, planStatusMoves, rankAtEnd } from '../src/domain/board.ts';
 
 const make = (title: string, extra: Partial<Task> = {}, rank = 1024): Task => ({
   ...createTask({ title }, rank, 1000, newTaskId(1000 + Math.floor(Math.random() * 1e6))),
@@ -150,4 +150,61 @@ test('planStatusMoves is null when nothing would change, and ignores unknown ids
   const plan = planStatusMoves([calm, make('x', { status: 'todo', rank: 20 })], ['nope', calm.id, calm.id], 'todo')!;
   assert.deepEqual(plan.changed.map((t) => t.id), [calm.id]);
   assert.equal(plan.next.find((t) => t.id === calm.id)?.rank, 20 + 1024);
+});
+
+// ---- The archive rule ----
+
+test('doneAt follows the same optional-field convention as sessionLinkedAt', () => {
+  const good = createTask({ title: 'old record' }, 1, 1);
+  const { doneAt, ...withoutField } = good;
+  assert.equal(parseTask(withoutField).doneAt, null);
+  assert.equal(parseTask({ ...good, doneAt: 500 }).doneAt, 500);
+  assert.throws(() => parseTask({ ...good, doneAt: 'soon' }), /doneAt/);
+});
+
+test('entering Done stamps doneAt; leaving clears; re-entering stamps fresh; a no-op stamps nothing', () => {
+  const base = make('t', { updatedAt: 1000 });
+  const now = 5_000;
+  const done = applyPatch(base, { status: 'done' }, now);
+  assert.equal(done.doneAt, now);
+  assert.equal(applyPatch(done, { needsAttentionSince: null }, now + 1).doneAt, now, 'a patch that keeps the status never resets the clock');
+  assert.equal(applyPatch(done, { status: 'done' }, now + 1).doneAt, now, 'a repeated Move-to-Done click never resets the clock');
+  const back = applyPatch(done, { status: 'todo' }, now + 2);
+  assert.equal(back.doneAt, null, 'leaving Done clears the anchor');
+  assert.equal(applyPatch(back, { status: 'done' }, now + 3).doneAt, now + 3, 'every stretch of Done counts fresh from its own entry');
+  assert.equal(createTask({ title: 'x', status: 'done' }, 1, 7).doneAt, 7);
+  assert.equal(createTask({ title: 'x' }, 1, 7).doneAt, null);
+});
+
+test('planStatusMoves reaches archived like any other target: end-of-column rank, clean stamps', () => {
+  const doneOld = make('d', { status: 'done', rank: 20, updatedAt: 1 });
+  const settled = make('a', { status: 'archived', rank: 10 });
+  const plan = planStatusMoves([settled, doneOld], [doneOld.id], 'archived')!;
+  const byId = new Map(plan.next.map((t) => [t.id, t]));
+  assert.equal(byId.get(doneOld.id)?.status, 'archived');
+  assert.equal(byId.get(doneOld.id)?.rank, 10 + 1024, 'appended beyond the existing archive ranks');
+  assert.equal(byId.get(doneOld.id)?.doneAt, null, 'leaving Done clears the archive anchor');
+  assert.deepEqual(plan.changed.map((t) => t.id), [doneOld.id]);
+});
+
+test('archiveCandidates picks exactly the done cards past the two-week anchor', () => {
+  const NOW = 10_000_000_000_000;
+  const day = 24 * 60 * 60_000;
+  const aged = make('old', { status: 'done', doneAt: NOW - 20 * day, updatedAt: 1 });
+  const fresh = make('new', { status: 'done', doneAt: NOW - 13 * day, updatedAt: NOW - 13 * day });
+  const edge = make('edge', { status: 'done', doneAt: NOW - 14 * day, updatedAt: 1 });
+  const archived = make('gone', { status: 'archived', doneAt: null, updatedAt: NOW - 40 * day });
+  const open = make('wip', { status: 'in_progress', doneAt: null });
+  assert.equal(ARCHIVE_AFTER_MS, 14 * day);
+  // The edge card sits exactly at the window: retired, not a day early or late.
+  assert.deepEqual(archiveCandidates([aged, fresh, edge, archived, open], NOW), [aged.id, edge.id]);
+  // Legacy records without doneAt borrow their updatedAt, the backfill's rule.
+  const legacy = make('anc', { status: 'done', doneAt: null, updatedAt: NOW - 20 * day });
+  const legacyFresh = make('lnew', { status: 'done', doneAt: null, updatedAt: NOW - day });
+  assert.deepEqual(archiveCandidates([legacy, legacyFresh], NOW), [legacy.id]);
+  // The tick: the next instant the board must wake at; null once it passed or it never will.
+  assert.equal(nextArchiveTickAt(fresh, NOW), fresh.doneAt! + ARCHIVE_AFTER_MS);
+  assert.equal(nextArchiveTickAt(aged, NOW), null);
+  assert.equal(nextArchiveTickAt(archived, NOW), null);
+  assert.equal(nextArchiveTickAt(open, NOW), null);
 });

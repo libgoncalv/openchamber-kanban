@@ -1,5 +1,5 @@
 import type { GuestSessionActivity } from '@openchamber/sdk';
-import { byRank, matchesFilter, type BoardFilter } from './board.ts';
+import { ARCHIVE_AFTER_MS, byRank, doneAnchor, matchesFilter, type BoardFilter } from './board.ts';
 import { DEFAULT_SYNC_OPTIONS, statusForSession, type AgentOutcome, type SyncOptions } from './sync.ts';
 import { STATUSES, type Task, type TaskStatus } from './task.ts';
 
@@ -102,10 +102,18 @@ export const LOOKS_DONE_TOOLTIP_MAX_MINUTES = 60;
 /** One task as either surface shows it. */
 export type BoardItem = {
   task: Task;
-  /** The status to group the row under: agent-adjusted for display, or stored when nothing live is known. */
+  /** The status to group the row under: agent-adjusted or archive-derived for display, or stored when nothing is pending. */
   displayStatus: TaskStatus;
   /** The live agent state implies a different status than the stored one — it changed while no writer was around to persist it. */
   movedByAgent: boolean;
+  /**
+   * The archive rule's analog of `movedByAgent`: a Done card past its window
+   * displays under Archive — the move the board page persists on its next
+   * load or at the card's own crossing instant, display-first on every
+   * surface (the rail never writes), exactly how an agent regroup relates to
+   * the page's persistence.
+   */
+  archivedPending: boolean;
   /** The row flags "look at this": a stored unseen marker, or the agent landed it in Review while nothing could persist the marker. */
   attention: boolean;
   /** Sort key for the Review section: the stored marker, else the session's last change. `null` for seen rows. */
@@ -266,8 +274,16 @@ export const buildBoardItem = (
   now: number = Date.now(),
 ): BoardItem => {
   const state = liveStateFor(task, live);
-  const displayStatus = effectiveStatus(task, state, sync);
-  const movedByAgent = displayStatus !== task.status;
+  const liveStatus = effectiveStatus(task, state, sync);
+  // The archive rule, display-side: a Done card two weeks past its anchor
+  // shows under Archive before (and regardless of) the page persisting the
+  // move — the same relationship an agent regroup has with the page's
+  // writes. The live status outranks it: a running session pulls the card
+  // straight back into In Progress, and re-entering Done starts the window
+  // fresh. An already-archived card (persisted earlier) derives nothing.
+  const archivedPending = liveStatus === 'done' && now - doneAnchor(task) >= ARCHIVE_AFTER_MS;
+  const displayStatus: TaskStatus = archivedPending ? 'archived' : liveStatus;
+  const movedByAgent = displayStatus !== task.status && !archivedPending;
   // Unseen either through the stored marker (the board's own sync set it
   // before) or because the agent landed it in Review while no board was
   // running — nothing was around to persist the marker then, so the row
@@ -276,16 +292,19 @@ export const buildBoardItem = (
   // is not unseen: the visit happened, just not through this board — the
   // board page persists that by clearing the marker when it observes it
   // (`autoDoneSync`), but the rail never writes, so the display checks it
-  // directly.
+  // directly. Retired rows (displaying archived, or stored archived) never
+  // flag: Done is deliberate work, Archive is retired work.
+  const retired = archivedPending || displayStatus === 'archived';
   const markerUnseen = task.needsAttentionSince !== null && state?.unread !== false;
-  const attention =
-    markerUnseen ||
-    (movedByAgent && displayStatus === 'review' && !(state?.unread === false));
+  const attention = retired
+    ? false
+    : markerUnseen || (movedByAgent && displayStatus === 'review' && !(state?.unread === false));
   const looksDone = looksDoneFor(task, state, now);
   return {
     task,
     displayStatus,
     movedByAgent,
+    archivedPending,
     attention,
     attentionSince: markerUnseen ? task.needsAttentionSince : (attention && state ? state.updatedAt : null),
     live: state,
@@ -331,17 +350,20 @@ export const buildBoardView = (
   return sections;
 };
 
-/** Rows flagged "look at this" anywhere except Done (that column is deliberate work, not open attention). */
+/** Rows flagged "look at this" anywhere except Done and Archive (those are deliberate and retired work, not open attention). */
 export const countUnseen = (sections: BoardSections): number =>
   Object.values(sections).reduce(
-    (count, items) => count + items.filter((item) => item.attention && item.displayStatus !== 'done').length,
+    (count, items) =>
+      count +
+      items.filter((item) => item.attention && item.displayStatus !== 'done' && item.displayStatus !== 'archived').length,
     0,
   );
 
-/** Rows outside Done — the "open" number both surfaces show. */
+/** Rows outside Done and Archive — the "open" number both surfaces show. */
 export const countOpen = (sections: BoardSections): number =>
   Object.values(sections).reduce(
-    (count, items) => count + items.filter((item) => item.displayStatus !== 'done').length,
+    (count, items) =>
+      count + items.filter((item) => item.displayStatus !== 'done' && item.displayStatus !== 'archived').length,
     0,
   );
 

@@ -1,7 +1,7 @@
 import type { GuestProject, HostClient } from '@openchamber/sdk';
 import { mountBadge, mountBanner, mountMenu, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
 import { applyPatch, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
-import { ALL_PROJECTS, NO_PROJECT, planStatusMoves, type BoardFilter } from '../domain/board.ts';
+import { ALL_PROJECTS, NO_PROJECT, archiveCandidates, nextArchiveTickAt, planStatusMoves, type BoardFilter } from '../domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
 import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove, autoDoneMove } from '../store/taskOps.ts';
 import { adoptOrphanSession } from '../store/adoptOps.ts';
@@ -37,14 +37,16 @@ export type BoardHost = Pick<
 
 /**
  * Agent state drives task status, one direction only per move: the agent
- * working moves a task to In Progress — from Done too, the rework
- * pull-back — and the agent finishing, asking a question, hitting a
- * permission prompt, or failing moves it to Review — never to Done. Done
- * is written two ways only: the user's own Mark Done (a click, drag, or
- * the ✓), and the board's auto-done rule (`autoDoneReady`-shaped
- * conditions in `boardView.ts`, checked by `autoDoneSync` below) after a
- * visited Review card's worktree shows commits ahead of its source
- * branch.
+ * working moves a task to In Progress — from Done or Archive too, the
+ * rework pull-back — and the agent finishing, asking a question, hitting a
+ * permission prompt, or failing moves it to Review — never to Done, and
+ * never out of Archive. Done is written two ways only: the user's own Mark
+ * Done (a click, drag, or the ✓), and the board's auto-done rule
+ * (`autoDoneReady`-shaped conditions in `boardView.ts`, checked by
+ * `autoDoneSync` below) after a visited Review card's worktree shows commits
+ * ahead of its source branch. Archived is a third shape of Done-write —
+ * the archive rule below: a card two weeks in Done is the board's alone to
+ * retire, no click, no commits.
  */
 const SYNC_OPTIONS = DEFAULT_SYNC_OPTIONS;
 
@@ -799,26 +801,41 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   };
 
   /**
-   * The board's one time-driven re-render: a quiet window crossing (the ✓
-   * appears) or a tooltip minute while it still counts — the earliest such
-   * instant across the tasks on the board. Everything else re-renders
-   * through snapshots and saves; nothing here ever writes.
+   * The board's one time-driven tick: a quiet window crossing (the ✓
+   * appears), a tooltip minute while it still counts, or a card's archive
+   * crossing — the earliest such instant across the tasks on the board.
+   * Everything else re-renders through snapshots and saves. The archive
+   * fire is the board's one automatic time-write: the very sweep a load
+   * runs, at the exact moment a card turns two weeks done, so a board left
+   * open moves its cards at the boundary itself instead of waiting for the
+   * next load.
    */
-  let looksDoneTimer: ReturnType<typeof setTimeout> | null = null;
-  const clearLooksDoneTick = () => {
-    if (looksDoneTimer !== null) { clearTimeout(looksDoneTimer); looksDoneTimer = null; }
+  let timeTickTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearTimeTick = () => {
+    if (timeTickTimer !== null) { clearTimeout(timeTickTimer); timeTickTimer = null; }
   };
-  const scheduleLooksDoneTick = () => {
-    clearLooksDoneTick();
+  const scheduleTimeTick = () => {
+    clearTimeTick();
     if (disposed) return;
     const now = Date.now();
     let next: number | null = null;
     for (const task of tasks) {
       const at = nextLooksDoneTickAt(task, liveStateFor(task, sessionSync.live()), now);
       if (at !== null && (next === null || at < next)) next = at;
+      const crossing = nextArchiveTickAt(task, now);
+      if (crossing !== null && (next === null || crossing < next)) next = crossing;
     }
     if (next === null) return;
-    looksDoneTimer = setTimeout(() => { looksDoneTimer = null; if (!disposed) render(); }, Math.max(0, next - Date.now()));
+    timeTickTimer = setTimeout(() => {
+      timeTickTimer = null;
+      if (disposed) return;
+      const archivePlan = planStatusMoves(tasks, archiveCandidates(tasks, Date.now()), 'archived');
+      if (archivePlan) {
+        for (const moved of archivePlan.changed) void saveTask(host, moved).catch(() => undefined);
+        setTasks(archivePlan.next);
+      }
+      render();
+    }, Math.max(0, next - Date.now()));
   };
 
   const render = () => {
@@ -827,7 +844,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     currentSections = sections;
     updateBadge(sections);
     board.render(sections);
-    scheduleLooksDoneTick();
+    scheduleTimeTick();
   };
 
   const openDetail = (id: string) => {
@@ -1097,22 +1114,46 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       } else {
         orphanWatermark = watermark;
       }
-      // The auto-done anchor backfill: tasks whose session was linked before
-      // `sessionLinkedAt` existed adopt their `createdAt` as the anchor — the
-      // best moment a legacy record carries. Local state takes them at once
-      // (so the rule can fire this very session), then one silent save per
-      // task lands the anchor; a failed save simply stays failed until the
-      // next load tries again, and the anchor being null keeps the card
-      // safely manual meanwhile.
+      // The anchor backfills — two silent conventions, one map, one save per
+      // backfilled task (a failed save simply stays failed until the next
+      // load tries again):
+      //  - the auto-done anchor: linked cards whose session predates
+      //    `sessionLinkedAt` adopt their `createdAt` — the best moment a
+      //    legacy record carries.
+      //  - the archive anchor: done cards that predate `doneAt` adopt their
+      //    `updatedAt` — the last change the record carries, usually the
+      //    moment it landed in Done. Captured from the pristine record so a
+      //    card needing both anchors cannot let the first backfill's own
+      //    `updatedAt` bump stand in for the second's.
       const anchorBackfills: Task[] = [];
+      const agingBackfills: Task[] = [];
       const anchored = loaded.map((task) => {
-        if (task.sessionId === null || task.sessionLinkedAt !== null) return task;
-        const backfilled = applyPatch(task, { sessionLinkedAt: task.createdAt });
-        anchorBackfills.push(backfilled);
-        return backfilled;
+        const legacyDoneAt = task.updatedAt;
+        let next = task;
+        if (next.sessionId !== null && next.sessionLinkedAt === null) {
+          next = applyPatch(next, { sessionLinkedAt: next.createdAt });
+          anchorBackfills.push(next);
+        }
+        if (next.status === 'done' && next.doneAt === null) {
+          next = applyPatch(next, { doneAt: legacyDoneAt });
+          agingBackfills.push(next);
+        }
+        return next;
       });
-      for (const task of anchorBackfills) void saveTask(host, task).catch(() => undefined);
-      setTasks(anchored);
+      for (const task of [...anchorBackfills, ...agingBackfills]) void saveTask(host, task).catch(() => undefined);
+      // The archive rule's write: done cards whose anchor sits two weeks
+      // (`ARCHIVE_AFTER_MS`) back move to archived through the shared
+      // bulk-move op — appended at the Archive column's end in rank order,
+      // attention-clean, only the changed records saved. The saves are
+      // best-effort: the view derives the same regroup from the anchors
+      // alone (`buildBoardItem`), so a failed save shows the card archived
+      // anyway and the next load retries. The board's timer keeps this
+      // current live on an open board.
+      const archivePlan = planStatusMoves(anchored, archiveCandidates(anchored, Date.now()), 'archived');
+      if (archivePlan) {
+        for (const moved of archivePlan.changed) void saveTask(host, moved).catch(() => undefined);
+      }
+      setTasks(archivePlan ? archivePlan.next : anchored);
       // A fresh load is the truth: selection entries whose task no longer
       // exists (deleted elsewhere, or its record failed to load) drop out,
       // and an armed column trash never survives a reload.
@@ -1161,7 +1202,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   return {
     dispose: () => {
       disposed = true;
-      clearLooksDoneTick();
+      clearTimeTick();
       if (mirrorTimer !== null) { clearTimeout(mirrorTimer); mirrorTimer = null; }
       if (agentPullTimer !== null) { clearTimeout(agentPullTimer); agentPullTimer = null; }
       stopAgentEvents();

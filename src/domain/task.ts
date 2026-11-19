@@ -1,4 +1,4 @@
-export const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'] as const;
+export const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done', 'archived'] as const;
 export type TaskStatus = (typeof STATUSES)[number];
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -7,6 +7,7 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   in_progress: 'In Progress',
   review: 'Review',
   done: 'Done',
+  archived: 'Archive',
 };
 
 export const TASK_SCHEMA_VERSION = 1;
@@ -75,6 +76,20 @@ export type Task = {
    * commits belong to. Cleared links and worktrees follow the same rule.
    */
   sessionLinkedAt: number | null;
+  /**
+   * When the task entered Done — the anchor of the archive rule: two weeks
+   * after this moment (`ARCHIVE_AFTER_MS` in `board.ts`) the board moves a
+   * Done card to `archived`. `applyPatch` stamps it whenever a status change
+   * enters Done (a drag, a move, a bulk move, the rail's ✓, the looks-done ✓,
+   * the auto-done rule) and clears it whenever one leaves Done — rework pulls
+   * the card back out, and every later stretch of Done counts fresh from its
+   * own entry. A repeated Move-to-Done click changes nothing, so the clock
+   * never resets under a no-op. `null` on tasks that were never in Done and
+   * on records saved before this field existed — those Done ones are
+   * backfilled with their `updatedAt` on the board's next load (one silent
+   * save per task), and the view falls back to `updatedAt` until then.
+   */
+  doneAt: number | null;
 };
 
 export type TaskDraft = {
@@ -86,7 +101,7 @@ export type TaskDraft = {
 };
 
 export type TaskPatch = Partial<
-  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes' | 'autoDoneCommit' | 'sessionLinkedAt'>
+  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes' | 'autoDoneCommit' | 'sessionLinkedAt' | 'doneAt'>
 >;
 
 export const isStatus = (value: unknown): value is TaskStatus =>
@@ -207,6 +222,7 @@ export const createTask = (draft: TaskDraft, rank: number, now = Date.now(), id 
   needsAttentionSince: null,
   autoDoneCommit: null,
   sessionLinkedAt: null,
+  doneAt: draft.status === 'done' ? now : null,
 });
 
 export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task => {
@@ -216,6 +232,13 @@ export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task
   if ('status' in patch) {
     if (!isStatus(patch.status)) throw new Error('Unknown status');
     next.status = patch.status;
+    // The archive rule's clock: entering Done stamps the moment; leaving it
+    // clears it — rework pulls the card back out of Done, and every later
+    // stretch of Done counts fresh from its own entry. A patch that keeps
+    // the status stamps nothing, so a repeated Move-to-Done click (or a
+    // stale-marker clear in a bulk move) never resets the clock.
+    if (next.status === 'done' && task.status !== 'done') next.doneAt = now;
+    else if (next.status !== 'done') next.doneAt = null;
   }
   if ('projectId' in patch) next.projectId = optionalRef(patch.projectId, 'projectId');
   if ('sourceBranch' in patch) next.sourceBranch = optionalRef(patch.sourceBranch, 'sourceBranch');
@@ -228,6 +251,7 @@ export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task
   if ('needsAttentionSince' in patch) next.needsAttentionSince = optionalTimestamp(patch.needsAttentionSince, 'needsAttentionSince');
   if ('autoDoneCommit' in patch) next.autoDoneCommit = optionalRef(patch.autoDoneCommit, 'autoDoneCommit');
   if ('sessionLinkedAt' in patch) next.sessionLinkedAt = optionalTimestamp(patch.sessionLinkedAt, 'sessionLinkedAt');
+  if ('doneAt' in patch) next.doneAt = optionalTimestamp(patch.doneAt, 'doneAt');
   if ('agentNotes' in patch) {
     const notes = cleanAgentNotes(patch.agentNotes);
     if (notes !== undefined) next.agentNotes = notes;
@@ -260,6 +284,7 @@ export const parseTask = (value: unknown): Task => {
     needsAttentionSince: optionalTimestamp(record.needsAttentionSince, 'needsAttentionSince'),
     autoDoneCommit: optionalRef(record.autoDoneCommit, 'autoDoneCommit'),
     sessionLinkedAt: optionalTimestamp(record.sessionLinkedAt, 'sessionLinkedAt'),
+    doneAt: optionalTimestamp(record.doneAt, 'doneAt'),
     ...cleanAgentNotesOptional(record.agentNotes),
   };
 };

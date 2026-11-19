@@ -106,8 +106,9 @@ test('a Done card only leaves Done for a running session, and a stale marker the
   const running = buildBoardView([reworking], new Map([['s3', state()]]), ALL);
   assert.equal(running.in_progress[0]?.displayStatus, 'in_progress');
   assert.equal(running.in_progress[0]?.movedByAgent, true);
-  // Quiet again: the card keeps its Done, marker or not.
-  const done = task('done', 'done', 1, { sessionId: 's3', projectId: 'p1', needsAttentionSince: 2000 });
+  // Quiet again: the card keeps its Done, marker or not. Its `doneAt` is
+  // pinned to the test's "now" so the archive window cannot drag it away.
+  const done = task('done', 'done', 1, { sessionId: 's3', projectId: 'p1', needsAttentionSince: 2000, doneAt: 9_000_000_000_000 });
   const live = new Map([['s3', state({ activity: 'idle', outcome: 'completed' })]]);
   const sections = buildBoardView([done], live, ALL);
   assert.equal(sections.done[0]?.displayStatus, 'done');
@@ -172,6 +173,58 @@ test('countOpen excludes Done; badgeForCounts tips to warning only while unseen 
   assert.equal(countUnseen(sections), 1);
   assert.deepEqual(badgeForCounts(countOpen(sections), countUnseen(sections)), { label: '1 open · 1 unseen', tone: 'warning' });
   assert.deepEqual(badgeForCounts(3, 0), { label: '3 open', tone: 'neutral' });
+});
+
+// ---- The archive rule ----
+
+test('a Done card past its two-week window displays under Archive before the page has persisted it', () => {
+  const NOW = 10_000_000_000_000;
+  const day = 24 * 60 * 60_000;
+  const aged = task('aged', 'done', 1, { doneAt: NOW - 20 * day });
+  const fresh = task('fresh', 'done', 2, { doneAt: NOW - 13 * day });
+  const edge = task('edge', 'done', 3, { doneAt: NOW - 14 * day, needsAttentionSince: NOW - 3 * day });
+  const sections = buildBoardView([aged, fresh, edge], new Map(), ALL, DEFAULT_SYNC_OPTIONS, NOW);
+  // The edge card sits exactly at the window, stale marker and all: retired.
+  assert.deepEqual(sections.archived.map((item) => item.task.title), ['aged', 'edge']);
+  assert.deepEqual(sections.done.map((item) => item.task.title), ['fresh']);
+  const item = sections.archived[0]!;
+  assert.equal(item.displayStatus, 'archived');
+  assert.equal(item.archivedPending, true);
+  assert.equal(item.movedByAgent, false, 'a board-rule regroup, not an agent move');
+  assert.equal(item.attention, false, 'retired rows never flag, stale marker or not');
+});
+
+test('a legacy Done record without doneAt borrows updatedAt as its archive anchor', () => {
+  const NOW = 10_000_000_000_000;
+  const old = task('old', 'done', 1, { doneAt: null, updatedAt: NOW - 15 * 24 * 60 * 60_000 });
+  const recent = task('recent', 'done', 2, { doneAt: null, updatedAt: NOW - 24 * 60 * 60_000 });
+  const sections = buildBoardView([old, recent], new Map(), ALL, DEFAULT_SYNC_OPTIONS, NOW);
+  assert.deepEqual(sections.archived.map((item) => item.task.title), ['old']);
+  assert.deepEqual(sections.done.map((item) => item.task.title), ['recent']);
+});
+
+test('a stored archived card holds against a finished session and yields to a running one', () => {
+  const stored = task('retired', 'archived', 1, { sessionId: 's9', projectId: 'p1' });
+  const finished = new Map([['s9', state({ activity: 'idle', outcome: 'completed', updatedAt: 9000 })]]);
+  const settled = buildBoardView([stored], finished, ALL);
+  assert.equal(settled.archived.length, 1);
+  assert.equal(settled.archived[0]?.archivedPending, false);
+  assert.equal(settled.archived[0]?.movedByAgent, false);
+  assert.equal(settled.review.length, 0, 'a longer-ago finish never drags a retired card out');
+  const running = buildBoardView([stored], new Map([['s9', state({ activity: 'running', outcome: null })]]), ALL);
+  assert.equal(running.in_progress.length, 1);
+  assert.equal(running.in_progress[0]?.movedByAgent, true);
+  assert.equal(running.archived.length, 0);
+});
+
+test('archived cards count as neither open nor unseen, however they got there', () => {
+  const NOW = 10_000_000_000_000;
+  const due = task('due', 'done', 1, { doneAt: NOW - 20 * 24 * 60 * 60_000, needsAttentionSince: 5 });
+  const stored = task('stored', 'archived', 2, { doneAt: null });
+  const review = task('review', 'review', 3, { needsAttentionSince: NOW - 1000 });
+  const sections = buildBoardView([due, stored, review], new Map(), ALL, DEFAULT_SYNC_OPTIONS, NOW);
+  assert.deepEqual(sections.archived.map((item) => item.task.title).sort(), ['due', 'stored']);
+  assert.deepEqual(badgeForCounts(countOpen(sections), countUnseen(sections)), { label: '1 open · 1 unseen', tone: 'warning' });
 });
 
 test('describeActivity maps every observable state to a key, a row line and a tone', () => {

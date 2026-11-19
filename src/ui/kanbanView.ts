@@ -8,8 +8,8 @@ import { el } from './dom.ts';
 
 /**
  * The one renderer behind both surfaces. The full-screen page mounts it in
- * `page` mode: five columns side by side, cards, a tap opens the task's
- * detail view. The rail panel mounts it in `rail` mode: the same five views
+ * `page` mode: six columns side by side, cards, a tap opens the task's
+ * detail view. The rail panel mounts it in `rail` mode: the same views
  * stacked as sections, slim rows. Every interactive affordance — the primary
  * tap, the ✓ mark-done shortcut, the rail's chat button, the ⋯ menu, dragging,
  * folding, selection, column cleanup — renders only when the surface supplies
@@ -238,14 +238,14 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     main.append(sub);
 
     // The rail's chat affordance, beside the ✓: on a linked card it opens
-    // that chat (any status — its history is worth opening; a Done card
-    // carries none of the other affordances but keeps this one); on an
-    // unlinked card that could receive one (a project to run in, not Done)
-    // the plus-cut glyph starts a chat attached to the card instead. Always
-    // visible like the ✓ (a finger has no hover); on an attention row the
-    // button wears the filled primary tint so the way in to the waiting
-    // chat is unmistakable.
-    if (rail && handlers.onChat && (task.sessionId || (task.projectId && item.displayStatus !== 'done'))) {
+    // that chat (any status — its history is worth opening; a Done or
+    // archived card carries none of the other affordances but keeps this
+    // one); on an unlinked card that could receive one (a project to run in,
+    // not Done or Archive) the plus-cut glyph starts a chat attached to the
+    // card instead. Always visible like the ✓ (a finger has no hover); on an
+    // attention row the button wears the filled primary tint so the way in
+    // to the waiting chat is unmistakable.
+    if (rail && handlers.onChat && (task.sessionId || (task.projectId && item.displayStatus !== 'done' && item.displayStatus !== 'archived'))) {
       const onChat = handlers.onChat;
       top.append(iconButton(
         task.sessionId ? CHAT_PATH : NEW_CHAT_PATH,
@@ -255,12 +255,12 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
       ));
     }
 
-    // Every non-done rail row carries a mark-done ✓ at its right edge —
-    // always visible, tinted with the app's info tone. This is the rail's
-    // Done write: Done stays a user-only click on every surface; Done rows
-    // show no affordance because they need none. The chat button appended
-    // just before it is the rail's other carve-out.
-    if (rail && item.displayStatus !== 'done' && handlers.onMarkDone) {
+    // Every non-done, non-archived rail row carries a mark-done ✓ at its
+    // right edge — always visible, tinted with the app's info tone. This is
+    // the rail's Done write: Done stays a user-only click on every surface;
+    // Done and archived rows show no affordance because they need none. The
+    // chat button appended just before it is the rail's other carve-out.
+    if (rail && item.displayStatus !== 'done' && item.displayStatus !== 'archived' && handlers.onMarkDone) {
       const onMarkDone = handlers.onMarkDone;
       top.append(iconButton(CHECK_DONE_PATH, 'Mark done', () => onMarkDone(task), { info: true }));
     }
@@ -340,7 +340,7 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     column.dataset.status = status;
     const head = el('div', 'kb-column-head');
     const count = el('span', 'kb-column-count', String(items.length));
-    if (items.some((entry) => entry.attention && entry.displayStatus !== 'done')) count.dataset.attn = 'true';
+    if (items.some((entry) => entry.attention && entry.displayStatus !== 'done' && entry.displayStatus !== 'archived')) count.dataset.attn = 'true';
     // The tools group keeps the head reading title left, actions right: the
     // count pill and, when the surface handles it, the column's trash. The
     // arming state (first press of the two-press confirm) lives in the
@@ -382,7 +382,7 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     if (head instanceof HTMLButtonElement) head.type = 'button';
     head.append(el('span', 'kb-psec-name', STATUS_LABELS[status]));
     const count = el('span', 'kb-psec-count', '0');
-    if (items.some((entry) => entry.attention && entry.displayStatus !== 'done')) count.dataset.attn = 'true';
+    if (items.some((entry) => entry.attention && entry.displayStatus !== 'done' && entry.displayStatus !== 'archived')) count.dataset.attn = 'true';
     head.append(count);
     if (collapsible) {
       head.append(el('span', 'kb-psec-chevron', collapsed ? '▸' : '▾'));

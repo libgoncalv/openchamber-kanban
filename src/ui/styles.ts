@@ -144,7 +144,7 @@ html,body{margin:0;min-height:100%;background:var(--oc-bg);color:var(--oc-fg);fo
 /* A capture is status feedback, not a place to read: under reduced motion the
    pulse and spin hold their shape — the timer and bars still live-update. */
 @media (prefers-reduced-motion:reduce){.kb-dict-dot,.kb-dict-spin{animation:none}}
-/* Rail panel (kb-rail on kb-page): the board's five views stacked as collapsible
+/* Rail panel (kb-rail on kb-page): the board's views stacked as collapsible
    sections with slim rows. The ✓ at a row's edge is the panel's one write
    (Mark done — deliberate, at the user's own click); every other deliberate
    action lives on the full board. */
