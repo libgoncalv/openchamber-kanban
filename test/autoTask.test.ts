@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_TASK_TITLE } from '../src/domain/task.ts';
-import { initialStatusForNewSession, isAdoptable, sessionTitleForTask, titleForOrphanSession } from '../src/domain/autoTask.ts';
+import { adoptionPlaceholderTitles, initialStatusForNewSession, isAdoptable, isRealSessionTitle, sessionTitleForTask, titleForOrphanSession } from '../src/domain/autoTask.ts';
 
 const base = { id: 'ses_1', title: 'Fix the thing', parentId: null, archivedAt: null, activity: 'running' as const, outcome: null };
 
@@ -51,6 +51,18 @@ test('titleForOrphanSession treats an empty title, or the host\'s id-as-title fa
   assert.equal(titleForOrphanSession({ id: 'ses_abcdefgh', title: 'ses_abcdefgh' }, 'Example project'), 'New session in Example project');
   assert.equal(titleForOrphanSession({ id: 'ses_abcdefgh', title: 'ses_abcdefgh' }, null), 'New session (ses_abcd)');
   assert.equal(titleForOrphanSession({ id: 'ses_abcdefgh', title: '' }), 'New session (ses_abcd)');
+});
+
+test('isRealSessionTitle says no name yet for empty or the id fallback, yes for anything else', () => {
+  assert.equal(isRealSessionTitle('ses_abcdefgh', 'ses_abcdefgh'), false);
+  assert.equal(isRealSessionTitle('ses_abcdefgh', '   '), false);
+  assert.equal(isRealSessionTitle('ses_abcdefgh', ''), false);
+  assert.equal(isRealSessionTitle('ses_abcdefgh', '  Fix login  '), true);
+});
+
+test('adoptionPlaceholderTitles rebuilds exactly what adoption leaves behind', () => {
+  assert.deepEqual(adoptionPlaceholderTitles('ses_abcdefgh', 'Example project'), ['New session in Example project', 'New session (ses_abcd)']);
+  assert.deepEqual(adoptionPlaceholderTitles('ses_abcdefgh', null), ['New session (ses_abcd)']);
 });
 
 test('sessionTitleForTask uses a real, renamed title as-is', () => {

@@ -51,6 +51,7 @@ openchamber-kanban/
       taskStore.ts      # one host.storage key per task: task:<id>
       taskOps.ts          # the write ops the full-screen page runs: moves (planMove/saveMove/statusMove), bulk moves (planStatusMoves in domain/board.ts), createBacklogTask, patches, deletes (single + batch, the dismissal-before-delete protocol) — pure + storage only
       adoptOps.ts         # the one session-adoption write every open surface runs (page + rail mirror): fresh-read dedupe, end-of-column rank, same-instant twin convergence by id tie-break — pure + storage only
+      titleOps.ts         # the one title-promotion write adoption leaves open: a placeholder-titled card takes its session's real title — fresh-read re-check (never a renamed card), clamped, converged by value — pure + storage only
       prefs.ts            # board filters + last-open task: host.storage key "prefs"
       orphanWatermark.ts    # "going forward" cutoff timestamp: host.storage key "orphan-watermark"
     host/
@@ -59,6 +60,7 @@ openchamber-kanban/
       sessionSync.ts      # live onSessions watcher → status sync (page) + the live map both surfaces display from
       worktreeSync.ts       # live onWorktrees watcher → worktree-deleted unlinks
       autoDoneSync.ts       # the auto-done rule's watcher: commit checks via the service route, observed-read marker clears, guarded Done writes
+      titlePromotion.ts   # the title promotion's watcher: carries the live snapshot's session titles to adoption's placeholder-titled cards, one attempt per session — silent
       orphanSessions.ts     # live onProjects+onSessions watcher → sessions with no task yet
       branchService.ts        # calls the local git-branch service; null on any failure
       dictation.ts            # mic capture state machine + chunked /transcribe client
@@ -210,6 +212,7 @@ A session with no task pointed at it, created at or after a persisted watermark 
 - `attemptedSessions` on each surface guards against retrying a failed adoption on every snapshot tick (cleared on `Refresh`/reopen on the page; on the mirror the mount's lifetime is the guard's), and each surface keeps its own exclusions: `dismissedSessions` re-read on every load, plus every linked session id.
 - `startingAgents` on each surface temporarily pauses adoption while that surface's own `startSession` request is in flight (Start Agent on the page, the chat button on the rail). The host can publish the new session before that request returns its id; once returned, the id is claimed — before the pause lifts — and the originating task is saved with the link before navigation. A final same-session check removes any duplicate card already linked to that session, and the shared op's post-save convergence now also closes what could once leak through that same-instant window on a watched session.
 - Subagents and archived sessions are never adopted. A toast announces each adoption (the winner's, when two surfaces raced).
+- **The title promotion closes what adoption's timing opens.** Adoption writes the card the moment a session becomes adoptable, which is usually before OpenCode's title agent has named it from the conversation (the host reports the session's own id as the fallback title until then) — so the card often lands on the `"New session …"` placeholder and nothing ever revisited it: the live map the boards display from did not even carry the session title. Now it does (`SessionLiveState.title`, filled by `src/host/sessionSync.ts`'s `rebuildLive`, updated on every snapshot like the other fields), and the sweep (`src/host/titlePromotion.ts`, one per open surface, fed by `setTasks` and by trusted snapshots through `sessionSync`'s `onLiveChange`, the auto-done rule's channels) offers each linked card still sitting on one of adoption's placeholder texts (`adoptionPlaceholderTitles`, pure, rebuilt exactly) the first real title it sees (`isRealSessionTitle`: trimmed, not the id). The write is one and shared, `promoteSessionTitle` in `src/store/titleOps.ts`: it re-reads storage freshly — a card renamed in the other surface is never clobbered, a card already promoted converges silently (`promoted: false` carries the fresh record) — clamps to the 200-char cap, and saves. Both surfaces promote to the same value, so no tie-break; at most one attempt per session per mount (the same never-forget guard adoption keeps), a `Refresh` resets it, and every failure path is silent. Fill in once: after the first promotion the card is its own name, and later session renames change nothing.
 
 ## Start Agent
 

@@ -95,6 +95,20 @@ test('a session running as anything but build never moves its task to review, un
   assert.deepEqual(changes, [[task.id, 'review']]);
 });
 
+test('the live map carries each session title, updated on later snapshots', async () => {
+  const { host, push } = fakeHost();
+  const sync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, () => {});
+  const task = { ...createTask({ title: 't', projectId: 'p1' }, 1), sessionId: 'ses_1' };
+  sync.sync([task]);
+  await Promise.resolve();
+  // Until OpenCode's title agent names the session, the host reports the id as the fallback title.
+  push('p1', snapshot('p1', [session('ses_1', 'running')]));
+  assert.equal(sync.live().get('ses_1')?.title, 'ses_1');
+  // The generated name replaces the fallback, and a rename flows through the same map.
+  push('p1', snapshot('p1', [{ ...session('ses_1', 'running'), title: 'Fix the login flow' }]));
+  assert.equal(sync.live().get('ses_1')?.title, 'Fix the login flow');
+});
+
 test('dispose releases every open subscription', async () => {
   const { host, unsubscribed } = fakeHost();
   const sync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, () => {});

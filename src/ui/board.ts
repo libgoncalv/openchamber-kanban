@@ -5,6 +5,7 @@ import { ALL_PROJECTS, NO_PROJECT, planStatusMoves, type BoardFilter } from '../
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
 import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove, autoDoneMove } from '../store/taskOps.ts';
 import { adoptOrphanSession } from '../store/adoptOps.ts';
+import { createTitlePromotion } from '../host/titlePromotion.ts';
 import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
@@ -222,6 +223,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     sessionSync.sync(tasks);
     worktreeSync.sync(tasks);
     autoDoneSync.sync(tasks);
+    titlePromotion.sync(tasks);
     scheduleMirrorPush();
   };
 
@@ -307,8 +309,12 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
   };
 
   const sessionSync = createSessionSync(host, SYNC_OPTIONS, applyAgentStatusChange, onSessionGone, {
-    /** Trusted snapshots feed the auto-done rule: a session stopping, or being read elsewhere. */
-    onLiveChange: () => { if (!disposed) autoDoneSync.evaluate(); },
+    /** Trusted snapshots feed the auto-done rule and the title promotion: a session stopping, being read elsewhere, or gaining its agent-generated name. */
+    onLiveChange: () => {
+      if (disposed) return;
+      autoDoneSync.evaluate();
+      titlePromotion.evaluate();
+    },
   });
   const worktreeSync = createWorktreeSync(host, onWorktreeGone);
 
@@ -340,6 +346,33 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
     },
   });
+
+  /**
+   * The title promotion (see `host/titlePromotion.ts`): a card adoption
+   * wrote with a "New session …" placeholder takes the session's
+   * agent-generated title the first time the live map carries one. The
+   * sweep only offers candidates — the shared op (`store/titleOps.ts`)
+   * re-reads storage freshly, so a card renamed anywhere is never clobbered,
+   * and the view converges on whatever storage holds through `onStale`.
+   * Silent, like the auto-done rule.
+   */
+  const titlePromotion = createTitlePromotion(
+    host,
+    () => sessionSync.live(),
+    (projectId) => (projectId === null ? null : projects.find((p) => p.id === projectId)?.name ?? null),
+    {
+      onPromoted: (task) => {
+        setTasks(tasks.map((t) => (t.id === task.id ? task : t)));
+        render();
+      },
+      onStale: (task) => {
+        const shown = tasks.find((t) => t.id === task.id);
+        if (!shown || shown.title === task.title) return;
+        setTasks(tasks.map((t) => (t.id === task.id ? task : t)));
+        render();
+      },
+    },
+  );
 
   // ---- The agent channel: mirror push + journal apply ----
   // How an OpenCode agent in one of this board's projects reads tasks and
@@ -1036,6 +1069,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       // A manual/initial reload is a clean slate for the retry guards above.
       attemptedSessions = new Set();
       lastAttemptedStatus = new Map();
+      titlePromotion.reset();
       dismissedSessionIds = dismissed;
       if (watermark === null) {
         // First time this feature has ever run: nothing that already exists right now is "going forward".
@@ -1101,6 +1135,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       sessionSync.dispose();
       worktreeSync.dispose();
       autoDoneSync.dispose();
+      titlePromotion.dispose();
       orphanWatcher?.dispose();
       detail?.dispose();
       board.dispose();

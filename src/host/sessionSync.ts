@@ -62,7 +62,7 @@ export const createSessionSync = (
       // `unread` (host-side "opened since the last turn") feeds both the
       // display's seen check and the auto-done visit signal; a host
       // without the field reads as unknown, never as seen.
-      liveState.set(session.id, { projectId, activity: session.activity, outcome: session.outcome, agent: session.agent ?? null, updatedAt: session.updatedAt, unread: session.unread ?? null });
+      liveState.set(session.id, { projectId, activity: session.activity, outcome: session.outcome, agent: session.agent ?? null, updatedAt: session.updatedAt, unread: session.unread ?? null, title: session.title });
     }
     return true;
   };

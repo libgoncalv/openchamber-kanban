@@ -28,7 +28,7 @@ const task = (title: string, status: Task['status'], rank: number, extra: Partia
 const ALL: BoardFilter = { projectId: ALL_PROJECTS };
 
 const state = (over: Partial<SessionLiveState> = {}): SessionLiveState =>
-  ({ projectId: 'p1', activity: 'running', outcome: null, agent: 'build', updatedAt: 5000, unread: null, ...over });
+  ({ projectId: 'p1', activity: 'running', outcome: null, agent: 'build', updatedAt: 5000, unread: null, title: 'ses_1', ...over });
 
 test('rows group by stored status in rank order when nothing live is known', () => {
   const a = task('a', 'todo', 2048);

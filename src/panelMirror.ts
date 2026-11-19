@@ -3,6 +3,7 @@ import { mountBadge } from '@openchamber/sdk/ui';
 import { loadTasks, saveTask, saveTaskRetrying } from './store/taskStore.ts';
 import { statusMove } from './store/taskOps.ts';
 import { adoptOrphanSession } from './store/adoptOps.ts';
+import { createTitlePromotion } from './host/titlePromotion.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from './store/orphanWatermark.ts';
 import { loadDismissedSessions } from './store/dismissedSessions.ts';
 import { buildLinkPatch, buildStartSessionRequest, chatPromptForTask } from './domain/chatLink.ts';
@@ -31,10 +32,13 @@ export type MirrorHost = Pick<
  * the task Done, through the same kept-rank status move the ⋯ menu takes;
  * and the chat button beside it opens the card's linked chat — or, when the
  * card has none, starts one attached to the card (no first message, the user
- * writes it) and links it here before navigating. Its one automatic write is
+ * writes it) and links it here before navigating. Its automatic writes are
  * the session adoption the page also runs (`store/adoptOps.ts`, its own
  * orphan watcher below): importing a running session with no task as a card
- * here, without the board ever opening — it is an import, never a regroup.
+ * here, without the board ever opening — it is an import, never a regroup —
+ * and the title promotion that follows it (`host/titlePromotion.ts`): a
+ * card the adoption titled with a placeholder takes the session's
+ * agent-generated name the moment the live map carries one.
  * What the mirror does update by itself is what it shows: live agent state
  * per linked session, regrouped for display only — where a row sits marks
  * the move the board will persist the next time it opens.
@@ -77,7 +81,9 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
   /** The one place `tasks` changes that also refreshes the live watch: only visible projects are subscribed. */
   const applyTasks = (next: Task[]) => {
     tasks = [...next];
-    sessionSync.sync(visibleTasksForProject(tasks, currentProject?.id ?? null));
+    const visible = visibleTasksForProject(tasks, currentProject?.id ?? null);
+    sessionSync.sync(visible);
+    titlePromotion.sync(visible);
   };
 
   /**
@@ -89,7 +95,7 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
    * passes here could ever save anything.
    */
   const sessionSync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, null, undefined, {
-    onLiveChange: () => { if (everLoaded && !disposed) render(); },
+    onLiveChange: () => { if (everLoaded && !disposed) { titlePromotion.evaluate(); render(); } },
     onSnapshot: () => {
       // Storage has no change push: outside writes (the board saving a drag,
       // a move, an edit) arrive on the next session snapshot tick or on this
@@ -97,6 +103,34 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       scheduleReload();
     },
   });
+
+  /**
+   * The page's title promotion, run here so a card adopted while only this
+   * panel is open still takes its session's agent-generated name without the
+   * board ever opening (see `host/titlePromotion.ts`). Scoped the way this
+   * panel displays — the visible tasks only, the shares it could ever write.
+   * The shared op (`store/titleOps.ts`) re-reads storage, so a rename
+   * another surface saved a moment ago is never clobbered, and both surfaces
+   * promoting the same card write the same title. Silent: the card simply
+   * gains its name.
+   */
+  const titlePromotion = createTitlePromotion(
+    host,
+    () => sessionSync.live(),
+    (projectId) => (projectId === null ? null : projects.find((p) => p.id === projectId)?.name ?? null),
+    {
+      onPromoted: (task) => {
+        applyTasks(tasks.map((t) => (t.id === task.id ? task : t)));
+        if (everLoaded) render();
+      },
+      onStale: (task) => {
+        const shown = tasks.find((t) => t.id === task.id);
+        if (!shown || shown.title === task.title) return;
+        applyTasks(tasks.map((t) => (t.id === task.id ? task : t)));
+        if (everLoaded) render();
+      },
+    },
+  );
 
   // ---- Orphan adoption (the page's own, run here too) ----
 
@@ -443,6 +477,7 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       stopDirectory();
       orphanWatcher?.dispose();
       sessionSync.dispose();
+      titlePromotion.dispose();
       board?.dispose();
     },
   };

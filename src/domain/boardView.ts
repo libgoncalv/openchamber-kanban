@@ -40,6 +40,15 @@ export type SessionLiveState = {
    * board, and this is the board's only way to see it.
    */
   unread: boolean | null;
+  /**
+   * The session's title exactly as the reporting snapshot carries it — the
+   * host reports the session's own id as the fallback title until OpenCode's
+   * title agent names the session from its conversation. The title
+   * promotion (`host/titlePromotion.ts`) follows exactly this field: a card
+   * adoption wrote with a placeholder takes the first real name that shows
+   * up here.
+   */
+  title: string;
 };
 
 export type ActivityTone = 'running' | 'waiting' | 'failed' | 'idle';

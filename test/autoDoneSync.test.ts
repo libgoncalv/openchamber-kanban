@@ -32,7 +32,7 @@ const pendingHost = () => {
 };
 
 const state = (over: Partial<SessionLiveState> = {}): SessionLiveState =>
-  ({ projectId: 'p1', activity: 'idle', outcome: 'completed', agent: 'build', updatedAt: 5000, unread: false, ...over });
+  ({ projectId: 'p1', activity: 'idle', outcome: 'completed', agent: 'build', updatedAt: 5000, unread: false, title: 'ses_1', ...over });
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   ...createTask({ title: id }, 1, 1000, id),

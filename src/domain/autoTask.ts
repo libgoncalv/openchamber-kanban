@@ -48,6 +48,34 @@ export const titleForOrphanSession = (session: Pick<OrphanCandidate, 'id' | 'tit
 };
 
 /**
+ * Whether a snapshot's `title` names the session at all: the host reports
+ * the session's own id as the fallback title until OpenCode's title agent
+ * writes a real one from the conversation, so the id — or whitespace — means
+ * "no name yet". The title promotion (`host/titlePromotion.ts`) acts only
+ * on real ones.
+ */
+export const isRealSessionTitle = (sessionId: string, title: string): boolean => {
+  const trimmed = title.trim();
+  return trimmed.length > 0 && trimmed !== sessionId;
+};
+
+/**
+ * The exact placeholder texts adoption (`adoptOrphanSession`) can leave a
+ * card titled, rebuilt from the session id and the project name known now:
+ * the project-name form, and the id form of an adoption that knew no
+ * project. The title promotion overwrites only a stored title matching one
+ * of these, so a card the user named is never touched — and a card adopted
+ * with the id-form placeholder keeps its eligibility even after the project
+ * was registered since. A project renamed between adoption and promotion
+ * simply misses (its old name is unrecoverable here); the card keeps the
+ * stale placeholder until the user renames it.
+ */
+export const adoptionPlaceholderTitles = (sessionId: string, projectName: string | null): string[] => [
+  ...(projectName ? [`New session in ${projectName}`] : []),
+  `New session (${sessionId.slice(0, 8)})`,
+];
+
+/**
  * The title given to the session `Start Agent` creates. A task you haven't
  * renamed yet is still titled `DEFAULT_TASK_TITLE` ("New task") — sending
  * that straight through would leave every unrenamed task's session titled
