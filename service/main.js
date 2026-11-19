@@ -588,6 +588,11 @@ var createAgentTaskRoutes = ({ store, notifyChange }) => {
 // src/service/server.ts
 var BODY_MAX = 131072;
 var COMMIT_BASE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+var SINCE_MS_PATTERN = /^\d{1,15}$/;
+var sinceIsoUtc = (ms) => {
+  const iso = new Date(ms).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} +0000`;
+};
 var readBody = (req) => new Promise((resolve) => {
   let size = 0;
   const parts = [];
@@ -670,12 +675,28 @@ var createServiceServer = ({ token: token2, git: git2, transcriber, agent: agent
         }
         if (req.method === "GET" && url.pathname === "/commits-ahead") {
           const directory = url.searchParams.get("directory") ?? "";
-          const base = url.searchParams.get("base") ?? "";
-          if (!path.isAbsolute(directory) || !COMMIT_BASE_PATTERN.test(base) || base.includes("..")) {
+          const base = url.searchParams.get("base");
+          const since = url.searchParams.get("since");
+          if (!path.isAbsolute(directory) || base === null === (since === null)) {
             json(res, 400, { error: "bad-request" });
             return;
           }
-          const count = await git2(directory, ["rev-list", "--count", `${base}..HEAD`]);
+          let countArgs;
+          if (base !== null) {
+            if (!COMMIT_BASE_PATTERN.test(base) || base.includes("..")) {
+              json(res, 400, { error: "bad-request" });
+              return;
+            }
+            countArgs = ["rev-list", "--count", `${base}..HEAD`];
+          } else {
+            const sinceRaw = since;
+            if (!SINCE_MS_PATTERN.test(sinceRaw)) {
+              json(res, 400, { error: "bad-request" });
+              return;
+            }
+            countArgs = ["rev-list", "--count", `--since=${sinceIsoUtc(Number.parseInt(sinceRaw, 10))}`, "HEAD"];
+          }
+          const count = await git2(directory, countArgs);
           if (!count.ok) {
             json(res, count.status, { error: count.error });
             return;

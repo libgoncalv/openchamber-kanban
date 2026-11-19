@@ -44,20 +44,23 @@ const task = (id: string, over: Partial<Task> = {}): Task => ({
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** The project-directory resolver most tests hand in: no project is ever known. */
+const noProjectDirectory = () => null;
+
 test('fetchCommitsAhead parses the service answer and nulls out every failure shape', async () => {
-  assert.deepEqual(await fetchCommitsAhead(fakeHost(200, '{"ahead":3,"head":"abc"}').host, '/wt', 'main'), { ahead: 3, head: 'abc' });
-  assert.deepEqual(await fetchCommitsAhead(fakeHost(200, '{"ahead":0,"head":null}').host, '/wt', 'main'), { ahead: 0, head: null });
-  assert.equal(await fetchCommitsAhead(fakeHost(422, '{"error":"not a git repository"}').host, '/wt', 'main'), null);
-  assert.equal(await fetchCommitsAhead(fakeHost(200, '{"ahead":"3","head":"abc"}').host, '/wt', 'main'), null);
-  assert.equal(await fetchCommitsAhead(fakeHost(200, '{"ahead":2,"head":7}').host, '/wt', 'main'), null);
-  assert.equal(await fetchCommitsAhead(fakeHost(200, 'not json').host, '/wt', 'main'), null);
+  assert.deepEqual(await fetchCommitsAhead(fakeHost(200, '{"ahead":3,"head":"abc"}').host, '/wt', { base: 'main' }), { ahead: 3, head: 'abc' });
+  assert.deepEqual(await fetchCommitsAhead(fakeHost(200, '{"ahead":0,"head":null}').host, '/wt', { base: 'main' }), { ahead: 0, head: null });
+  assert.equal(await fetchCommitsAhead(fakeHost(422, '{"error":"not a git repository"}').host, '/wt', { base: 'main' }), null);
+  assert.equal(await fetchCommitsAhead(fakeHost(200, '{"ahead":"3","head":"abc"}').host, '/wt', { base: 'main' }), null);
+  assert.equal(await fetchCommitsAhead(fakeHost(200, '{"ahead":2,"head":7}').host, '/wt', { base: 'main' }), null);
+  assert.equal(await fetchCommitsAhead(fakeHost(200, 'not json').host, '/wt', { base: 'main' }), null);
 });
 
 test('a candidate with commits ahead fires the write with the HEAD as the guard', async () => {
   const { host, calls } = fakeHost(200, '{"ahead":2,"head":"sha_1"}');
   const writes: Array<[string, string]> = [];
   const t = task('t_ad0001', { sessionId: null }); // unlinked: qualifies without any live state
-  const sync = createAutoDoneSync(host, () => new Map(), { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
+  const sync = createAutoDoneSync(host, () => new Map(), noProjectDirectory, { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
   sync.sync([t]);
   await tick();
   assert.deepEqual(writes, [[t.id, 'sha_1']]);
@@ -71,14 +74,14 @@ test('the guard holds and zero ahead stays quiet', async () => {
   // The exact commit that fired before: nothing re-fires — the drag-back case.
   const fired = task('t_ad0002', { sessionId: null, autoDoneCommit: 'sha_1' });
   const { host } = fakeHost(200, '{"ahead":2,"head":"sha_1"}');
-  const sync = createAutoDoneSync(host, () => new Map(), { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
+  const sync = createAutoDoneSync(host, () => new Map(), noProjectDirectory, { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
   sync.sync([fired]);
   await tick();
   assert.equal(writes.length, 0);
   // No commits ahead of the source branch: nothing to acknowledge yet.
   const none = task('t_ad0003', { sessionId: null });
   const { host: host2 } = fakeHost(200, '{"ahead":0,"head":"sha_2"}');
-  const sync2 = createAutoDoneSync(host2, () => new Map(), { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
+  const sync2 = createAutoDoneSync(host2, () => new Map(), noProjectDirectory, { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
   sync2.sync([none]);
   await tick();
   assert.deepEqual(writes, []);
@@ -88,12 +91,12 @@ test('a linked session must be trusted-idle before any write; an unknown one wai
   const { host, calls } = fakeHost(200, '{"ahead":2,"head":"sha_1"}');
   const writes: string[] = [];
   const linked = task('t_ad0004', { sessionId: 'ses_1' });
-  const sync = createAutoDoneSync(host, () => new Map(), { onAutoDone: (id) => writes.push(id), onObservedRead: () => {} });
+  const sync = createAutoDoneSync(host, () => new Map(), noProjectDirectory, { onAutoDone: (id) => writes.push(id), onObservedRead: () => {} });
   sync.sync([linked]);
   await tick();
   assert.equal(writes.length, 0, 'no trusted snapshot for the linked session: no fire');
   assert.equal(calls.length, 0);  const idle: ReadonlyMap<string, SessionLiveState> = new Map([['ses_1', state({ unread: null })]]); // seen the old-fashioned way (no marker) is enough
-  const sync2 = createAutoDoneSync(host, () => idle, { onAutoDone: (id) => writes.push(id), onObservedRead: () => {} });
+  const sync2 = createAutoDoneSync(host, () => idle, noProjectDirectory, { onAutoDone: (id) => writes.push(id), onObservedRead: () => {} });
   const seenHere = task('t_ad0005', { sessionId: 'ses_1', needsAttentionSince: null });
   sync2.sync([seenHere]);
   await tick();
@@ -106,7 +109,7 @@ test('an observed read elsewhere clears the stored marker, then the rule may fir
   const reads: string[] = [];
   const writes: Array<[string, string]> = [];
   let stored = task('t_ad0006', { sessionId: 'ses_1', needsAttentionSince: 1000 });
-  const sync = createAutoDoneSync(host, () => live, { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: (id) => reads.push(id) });
+  const sync = createAutoDoneSync(host, () => live, noProjectDirectory, { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: (id) => reads.push(id) });
   sync.sync([stored]); // pass 1: the host reports the chat was opened somewhere else
   await tick();
   assert.deepEqual(reads, [stored.id]);
@@ -126,7 +129,7 @@ test('a failed check retries only after the floor, on the next event', async () 
     const { host, calls } = fakeHost(500, '{"error":"no service"}');
     const writes: string[] = [];
     const t = task('t_ad0007', { sessionId: null });
-    const sync = createAutoDoneSync(host, () => new Map(), { onAutoDone: (id) => writes.push(id), onObservedRead: () => {} });
+    const sync = createAutoDoneSync(host, () => new Map(), noProjectDirectory, { onAutoDone: (id) => writes.push(id), onObservedRead: () => {} });
     sync.sync([t]);
     await tick();
     assert.equal(calls.length, 1);
@@ -148,7 +151,7 @@ test('a check still in flight never starts twice, and a fetch that resolves afte
   const { host, calls, answer } = pendingHost();
   const writes: Array<[string, string]> = [];
   const t = task('t_ad0008', { sessionId: null });
-  const sync = createAutoDoneSync(host, () => new Map(), { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
+  const sync = createAutoDoneSync(host, () => new Map(), noProjectDirectory, { onAutoDone: (id, sha) => writes.push([id, sha]), onObservedRead: () => {} });
   sync.sync([t]);
   sync.sync([t]);
   assert.equal(calls.length, 1, 'in flight: one start');
@@ -164,7 +167,7 @@ test('a disposed watcher answers nothing', async () => {
   const writes: string[] = [];
   const reads: string[] = [];
   const seenElsewhere = task('t_ad0009', { sessionId: 'ses_1', needsAttentionSince: 1000 });
-  const sync = createAutoDoneSync(host, () => new Map([['ses_1', state({ unread: false })]]), { onAutoDone: (id) => writes.push(id), onObservedRead: (id) => reads.push(id) });
+  const sync = createAutoDoneSync(host, () => new Map([["ses_1", state({ unread: false })]]), noProjectDirectory, { onAutoDone: (id) => writes.push(id), onObservedRead: (id) => reads.push(id) });
   sync.sync([]);
   sync.dispose();
   sync.sync([seenElsewhere]);
@@ -180,4 +183,73 @@ test('autoDoneCandidate itself is exported and pure — the watcher double-check
   const noState: SessionLiveState | null = null;
   assert.equal(autoDoneCandidate(t, noState), true);
   assert.equal(autoDoneCandidate({ ...t, status: 'done' }, noState), false);
+});
+
+// ---- The project-root evidence mode: commits newer than the session-link anchor ----
+
+test('root-mode evidence fetches the project directory with the since anchor, and fires on commits', async () => {
+  const { host, calls } = fakeHost(200, '{"ahead":3,"head":"sha_7"}');
+  const writes: Array<[string, string]> = [];
+  // No worktree at all — the common root card. The anchor sits at link time.
+  const t = task('t_ad0011', { projectId: 'p1', sessionId: null, worktree: null, sourceBranch: null, sessionLinkedAt: 500 });
+  const sync = createAutoDoneSync(host, () => new Map(), (projectId) => (projectId === null ? null : '/proj'), {
+    onAutoDone: (id, sha) => writes.push([id, sha]),
+    onObservedRead: () => {},
+  });
+  sync.sync([t]);
+  await tick();
+  assert.deepEqual(writes, [[t.id, 'sha_7']]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]?.query, { directory: '/proj', since: '500' });
+});
+
+test('an unknown project directory keeps the root-mode check quiet', async () => {
+  const { host, calls } = fakeHost(200, '{"ahead":3,"head":"sha_7"}');
+  const writes: Array<[string, string]> = [];
+  const t = task('t_ad0012', { projectId: 'p1', sessionId: null, worktree: null, sourceBranch: null, sessionLinkedAt: 500 });
+  const sync = createAutoDoneSync(host, () => new Map(), noProjectDirectory, {
+    onAutoDone: (id, sha) => writes.push([id, sha]),
+    onObservedRead: () => {},
+  });
+  sync.sync([t]);
+  await tick();
+  assert.deepEqual(writes, []);
+  assert.equal(calls.length, 0, 'no project, no git call, no error anywhere');
+});
+
+test('root mode fires only through the same gates, and the anchor survives a worktree-less linked session', async () => {
+  const live = new Map([['ses_1', state({ unread: false })]]);
+  const { host, calls } = fakeHost(200, '{"ahead":1,"head":"sha_8"}');
+  const writes: Array<[string, string]> = [];
+  // A linked session must still be seen as stopped: the running one waits.
+  const running = task('t_ad0013', { projectId: 'p1', sessionId: 'ses_1', worktree: null, sourceBranch: null, sessionLinkedAt: 500 });
+  const sync = createAutoDoneSync(host, () => new Map([['ses_1', state({ unread: false, activity: 'running' })]]), (projectId) => (projectId === null ? null : '/proj'), {
+    onAutoDone: (id, sha) => writes.push([id, sha]),
+    onObservedRead: () => {},
+  });
+  sync.sync([running]);
+  await tick();
+  assert.equal(writes.length, 0);
+  assert.equal(calls.length, 0, 'a running session is never stopped, no fetch');
+  const idle = { ...running, id: 't_ad0014' };
+  const sync2 = createAutoDoneSync(host, () => live, (projectId) => (projectId === null ? null : '/proj'), {
+    onAutoDone: (id, sha) => writes.push([id, sha]),
+    onObservedRead: () => {},
+  });
+  sync2.sync([idle]);
+  await tick();
+  assert.deepEqual(writes, [[idle.id, 'sha_8']]);
+});
+
+test('the fired HEAD guard holds in root mode too — a drag-back out of Done waits for a newer commit', async () => {
+  const writes: Array<[string, string]> = [];
+  const fired = task('t_ad0015', { projectId: 'p1', sessionId: null, worktree: null, sourceBranch: null, sessionLinkedAt: 500, autoDoneCommit: 'sha_7' });
+  const { host } = fakeHost(200, '{"ahead":3,"head":"sha_7"}');
+  const sync = createAutoDoneSync(host, () => new Map(), (projectId) => (projectId === null ? null : '/proj'), {
+    onAutoDone: (id, sha) => writes.push([id, sha]),
+    onObservedRead: () => {},
+  });
+  sync.sync([fired]);
+  await tick();
+  assert.deepEqual(writes, []);
 });

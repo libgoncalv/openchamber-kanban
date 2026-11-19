@@ -212,7 +212,7 @@ export const nextLooksDoneTickAt = (
  * Whether the board's auto-done rule may write Done for this task itself,
  * from purely stored and live facts. `true` here only puts the card in
  * shape for the commit check the domain cannot run: in Review, already
- * visited, and its session stopped.
+ * visited, its session stopped, and with commit evidence of some kind.
  *
  *  - In Review, however it landed there (the chosen scope: any task in
  *    Review, a user's own drag included).
@@ -221,23 +221,34 @@ export const nextLooksDoneTickAt = (
  *    reports the session `unread: false` (the user opened its chat
  *    anywhere else — OpenCode sidebar, mobile, another device).
  *  - The session stopped: a linked session must be trusted-idle with any
- *    outcome but `failed`; and a linked session whose state is unknown
+ *    outcome but `failed`; a linked session whose state is unknown
  *    waits — it might be running right now, and the board must never
  *    write Done while the live sync would yank it straight back to
- *    In Progress. No linked session at all also qualifies. A waiting
- *    snapshot never qualifies either: the agent is mid-question, not done.
- *  - There is something to check: a worktree with a directory and a
- *    recorded source branch to count commits ahead of. Tasks without
- *    either stay manual, no matter how visited they are.
+ *    In Progress. A waiting snapshot never qualifies either: the agent is
+ *    mid-question, not done. No linked session at all also qualifies, as
+ *    long as the card still carries its evidence.
+ *  - There is commit evidence of some kind, in one of two modes:
+ *     - a real session card running in the project root (the common
+ *       case: most agents never enter a worktree) carries
+ *       `sessionLinkedAt`, the moment its session was linked, recorded by
+ *       every flow that writes the link; `null` also retires the evidence
+ *       when the link itself is cleared. The watcher then asks the
+ *       service for commits newer than that moment in the project.
+ *     - a worktree card carries a worktree directory plus a recorded
+ *       `sourceBranch` to count commits ahead of — the shape the old
+ *       worktree-first design assumed; no current flow records the
+ *       branch, so the field stays the backward-compat path it is.
+ *    Tasks without either stay manual, no matter how visited they are.
  *
  * The commit evidence itself is the watcher's job (`autoDoneSync`): it
- * asks the service how far the worktree sits ahead of that source branch,
- * compares the HEAD hash with the task's guard (`autoDoneCommit`), and
- * only then writes Done through the board's shared ops.
+ * asks the service how far the evidence window holds, compares the HEAD
+ * hash with the task's guard (`autoDoneCommit`), and only then writes
+ * Done through the board's shared ops.
  */
 export const autoDoneCandidate = (task: Task, state: SessionLiveState | null): boolean => {
   if (task.status !== 'review') return false;
-  if (task.worktree === null || task.sourceBranch === null) return false;
+  const hasWorktreeEvidence = task.worktree !== null && task.sourceBranch !== null;
+  if (!hasWorktreeEvidence && task.sessionLinkedAt === null) return false;
   const visited = task.needsAttentionSince === null || state?.unread === false;
   if (!visited) return false;
   if (task.sessionId !== null) {

@@ -297,7 +297,8 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
     if (reason === 'deleted') {
       deleteTaskForGoneSession(taskId, `Deleted "${task.title}" — its session was deleted.`);
     } else {
-      clearTaskLink(taskId, { sessionId: null }, `Unlinked "${task.title}" — its session was archived.`);
+      // The anchor dies with the link, so a stale window can never fire the auto-done rule on a session that is gone.
+      clearTaskLink(taskId, { sessionId: null, sessionLinkedAt: null }, `Unlinked "${task.title}" — its session was archived.`);
     }
   };
 
@@ -327,25 +328,34 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
    * sits in Review, and the observed-read writer skips a marker already
    * gone.
    */
-  const autoDoneSync = createAutoDoneSync(host, () => sessionSync.live(), {
-    onAutoDone: (taskId, commitSha) => {
-      const task = tasks.find((t) => t.id === taskId);
-      if (!task) return;
-      const updated = autoDoneMove(task, commitSha);
-      if (!updated) return;
-      setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
-      render();
-      void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
+  const autoDoneSync = createAutoDoneSync(
+    host,
+    () => sessionSync.live(),
+    // The project-root evidence mode: where to count the commits. The same
+    // live project list the mirror push maps agent directories against, so a
+    // project unknown yet simply has no directory and the check stays quiet
+    // until the next snapshot.
+    (projectId) => (projectId === null ? null : projects.find((p) => p.id === projectId)?.directory ?? null),
+    {
+      onAutoDone: (taskId, commitSha) => {
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) return;
+        const updated = autoDoneMove(task, commitSha);
+        if (!updated) return;
+        setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
+        render();
+        void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
+      },
+      onObservedRead: (taskId) => {
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task || task.needsAttentionSince === null) return;
+        const updated = applyPatch(task, { needsAttentionSince: null });
+        setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
+        render();
+        void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
+      },
     },
-    onObservedRead: (taskId) => {
-      const task = tasks.find((t) => t.id === taskId);
-      if (!task || task.needsAttentionSince === null) return;
-      const updated = applyPatch(task, { needsAttentionSince: null });
-      setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
-      render();
-      void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
-    },
-  });
+  );
 
   /**
    * The title promotion (see `host/titlePromotion.ts`): a card adoption
@@ -873,6 +883,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         const current = tasks.find((t) => t.id === task.id) ?? task;
         const updated = applyPatch(current, {
           sessionId,
+          // The auto-done anchor begins with this explicit claim: work the
+          // session did for other cards stays out of this one's window.
+          sessionLinkedAt: Date.now(),
           ...(sessionProjectId ? { projectId: sessionProjectId } : {}),
           status: current.status === 'backlog' ? 'todo' : current.status,
         });
@@ -890,7 +903,10 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         openDetail(task.id);
       },
       onUnlinkSession: async () => {
-        const patched = patchTask(tasks, task.id, { sessionId: null });
+        // The anchor dies with the link: a task no longer points at the
+        // session its commits belong to, so the evidence window closes —
+        // a re-link re-anchors.
+        const patched = patchTask(tasks, task.id, { sessionId: null, sessionLinkedAt: null });
         if (!patched) return;
         await saveTask(host, patched.task);
         setTasks(patched.next);
@@ -955,6 +971,9 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
           title,
           description,
           sessionId: result.sessionId,
+          // The auto-done anchor: the session was born in the call above, so
+          // every commit it makes counts from here.
+          sessionLinkedAt: Date.now(),
           projectId,
           status: 'in_progress',
           worktree: resolveTaskWorktree(false, result),
@@ -1044,7 +1063,7 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
           if (sessionState === 'deleted') {
             if (deleteTaskForGoneSession(current.id, null)) deleted += 1;
           } else if (sessionState === 'archived') {
-            if (clearTaskLink(current.id, { sessionId: null }, null)) cleared += 1;
+            if (clearTaskLink(current.id, { sessionId: null, sessionLinkedAt: null }, null)) cleared += 1;
           }
         }
         if (current.worktree && worktreeLinkState(current.worktree.directory, worktreesView) === 'gone') {
@@ -1078,7 +1097,22 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
       } else {
         orphanWatermark = watermark;
       }
-      setTasks(loaded);
+      // The auto-done anchor backfill: tasks whose session was linked before
+      // `sessionLinkedAt` existed adopt their `createdAt` as the anchor — the
+      // best moment a legacy record carries. Local state takes them at once
+      // (so the rule can fire this very session), then one silent save per
+      // task lands the anchor; a failed save simply stays failed until the
+      // next load tries again, and the anchor being null keeps the card
+      // safely manual meanwhile.
+      const anchorBackfills: Task[] = [];
+      const anchored = loaded.map((task) => {
+        if (task.sessionId === null || task.sessionLinkedAt !== null) return task;
+        const backfilled = applyPatch(task, { sessionLinkedAt: task.createdAt });
+        anchorBackfills.push(backfilled);
+        return backfilled;
+      });
+      for (const task of anchorBackfills) void saveTask(host, task).catch(() => undefined);
+      setTasks(anchored);
       // A fresh load is the truth: selection entries whose task no longer
       // exists (deleted elsewhere, or its record failed to load) drop out,
       // and an armed column trash never survives a reload.

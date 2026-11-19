@@ -36,13 +36,16 @@ export const buildStartSessionRequest = (task: Task): StartSessionRequest => {
 /**
  * What a successful start writes onto the task: the session link and the
  * worktree the host reports having used (prefers the host's own echo; falls
- * back to the requested directory). Never a status change — on the panel,
- * agent-driven moves stay the board's thing to persist; the chat's
- * existence is written, the card's column is not.
+ * back to the requested directory), and the auto-done rule's commit anchor —
+ * `sessionLinkedAt`, the moment this save runs, because the session is born
+ * here and every commit it ever makes is newer than that. Never a status
+ * change — on the panel, agent-driven moves stay the board's thing to
+ * persist; the chat's existence is written, the card's column is not.
  */
-export const buildLinkPatch = (request: StartSessionRequest, result: StartSessionResult & { sessionId: string }): TaskPatch => ({
+export const buildLinkPatch = (request: StartSessionRequest, result: StartSessionResult & { sessionId: string }, now = Date.now()): TaskPatch => ({
   sessionId: result.sessionId,
   worktree: resolveTaskWorktree(request.worktree ?? false, result),
+  sessionLinkedAt: now,
 });
 
 /**

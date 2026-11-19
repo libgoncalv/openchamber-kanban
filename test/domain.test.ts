@@ -50,6 +50,18 @@ test('autoDoneCommit follows the same optional-field convention as needsAttentio
   assert.equal(applyPatch(patched, { autoDoneCommit: null }).autoDoneCommit, null);
 });
 
+test('sessionLinkedAt follows the same optional-field convention, a timestamp like needsAttentionSince', () => {
+  const good = createTask({ title: 'anchored' }, 1, 1);
+  assert.equal(good.sessionLinkedAt, null, 'fresh tasks carry no anchor yet');
+  const { sessionLinkedAt, ...withoutField } = good;
+  assert.equal(parseTask(withoutField).sessionLinkedAt, null, 'records saved before the field existed parse as null');
+  assert.equal(parseTask({ ...good, sessionLinkedAt: 1795_051_680_000 }).sessionLinkedAt, 1795_051_680_000);
+  assert.throws(() => parseTask({ ...good, sessionLinkedAt: 'yesterday' }), /sessionLinkedAt/);
+  const patched = applyPatch(good, { sessionLinkedAt: 1795_051_680_001 });
+  assert.equal(patched.sessionLinkedAt, 1795_051_680_001);
+  assert.equal(applyPatch(patched, { sessionLinkedAt: null }).sessionLinkedAt, null, 'unlinking retires the evidence');
+});
+
 test('applyPatch sets and clears needsAttentionSince', () => {
   const task = createTask({ title: 'a' }, 1, 100);
   assert.equal(applyPatch(task, { needsAttentionSince: 500 }).needsAttentionSince, 500);

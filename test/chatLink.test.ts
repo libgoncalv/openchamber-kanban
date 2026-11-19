@@ -49,8 +49,9 @@ test('buildLinkPatch links the session and echoes the worktree the host used', (
     sent: 'skipped',
     worktree: { directory: '/repo/.worktrees/w1', branch: 'fix', name: 'w1', status: 'ready' },
   };
-  const patch = buildLinkPatch(request, result);
+  const patch = buildLinkPatch(request, result, 1750_000_000_000);
   assert.equal(patch.sessionId, 'ses_1');
+  assert.equal(patch.sessionLinkedAt, 1750_000_000_000, 'the auto-done anchor begins with the link: the session is born here');
   assert.deepEqual(patch.worktree, { directory: '/repo/.worktrees/w1', branch: 'fix' });
   assert.ok(!('status' in patch), 'the rail never writes a status');
 });

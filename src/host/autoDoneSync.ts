@@ -7,6 +7,17 @@ export type CommitAheadResult = { ahead: number; head: string | null };
 export type AutoDoneSyncHost = Pick<HostClient, 'serviceRequest'>;
 
 /**
+ * What the commit check asks for, one of two evidence modes:
+ *  - `{ base }` — the worktree path: how far the worktree sits ahead of a
+ *    recorded source branch (`rev-list --count <base>..HEAD`).
+ *  - `{ since }` — the project-root path, the common one: how many commits
+ *    are newer, in commit-date terms, than the moment the card's session
+ *    was linked (`rev-list --count --since <utc> HEAD`). That stamp is the
+ *    `sessionLinkedAt` anchor every link flow records.
+ */
+export type CommitAheadQuery = { base: string } | { since: number };
+
+/**
  * How long a finished commit check holds a task's retry back. The rule is
  * event-driven only — it runs when tasks or snapshots change — but a host
  * without the local git service (mobile, VS Code, an unapproved install)
@@ -20,21 +31,25 @@ export type AutoDoneSyncHost = Pick<HostClient, 'serviceRequest'>;
 const RETRY_PAUSE_MS = 60_000;
 
 /**
- * Asks the local git service how far a worktree sits ahead of a base ref,
- * and at which HEAD. Best-effort like `fetchServiceBranches`: the service
- * is optional (unapproved, not running, no services on this platform), git
- * can fail (base ref deleted, empty repository), and any of it is a
- * `null`, never a throw — the auto-done rule simply does not fire on
+ * Asks the local git service how far the evidence window holds: either the
+ * worktree ahead of a base ref, or commits newer than a link anchor. The
+ * service is optional (unapproved, not running, no services on this
+ * platform), git can fail (base ref deleted, empty repository), and any of
+ * it is a `null`, never a throw — the auto-done rule simply does not fire on
  * unknown evidence. The service route itself runs `git -C <directory>
- * rev-list --count <base>..HEAD` plus `rev-parse HEAD` host-side.
+ * rev-list --count <base>..HEAD` / `rev-list --count --since <utc> HEAD`
+ * plus `rev-parse HEAD` host-side.
  */
 export const fetchCommitsAhead = async (
   host: AutoDoneSyncHost,
   directory: string,
-  base: string,
+  query: CommitAheadQuery,
 ): Promise<CommitAheadResult | null> => {
   try {
-    const result = await host.serviceRequest({ method: 'GET', path: '/commits-ahead', query: { directory, base } });
+    const params: Record<string, string> = { directory };
+    if ('base' in query) params.base = query.base;
+    else params.since = String(query.since);
+    const result = await host.serviceRequest({ method: 'GET', path: '/commits-ahead', query: params });
     if (result.status !== 200) return null;
     const parsed: unknown = JSON.parse(result.body);
     if (!parsed || typeof parsed !== 'object') return null;
@@ -71,7 +86,6 @@ export type AutoDoneSyncCallbacks = {
  * chat was read elsewhere). No timers: every input to the rule arrives
  * through one of those two channels, and the commit evidence is
  * fetch-per-candidate rather than a poll.
- *
  * Two writes, both the board page's through its callbacks (the page stays
  * the single status writer; the rail never writes and inherits the same
  * view):
@@ -88,6 +102,13 @@ export const createAutoDoneSync = (
   host: AutoDoneSyncHost,
   /** The sessionSync live provider (read-only), so snapshot state is shared, not duplicated. */
   live: () => ReadonlyMap<string, SessionLiveState>,
+  /**
+   * Where the project-root evidence mode counts its commits: the project's
+   * directory, from the same live project list the mirror push keeps.
+   * Unknown project (no snapshot yet, a task's project gone) answers `null`
+   * and the check stays quiet until a later pass.
+   */
+  projectDirectory: (projectId: string | null) => string | null,
   callbacks: AutoDoneSyncCallbacks,
 ) => {
   let tasksById = new Map<string, Task>();
@@ -103,10 +124,28 @@ export const createAutoDoneSync = (
   /** One candidate's commit check: fetch, verify the facts still hold, then hand the write to the page. */
   const checkCommit = async (taskId: string): Promise<void> => {
     try {
-      const directory = tasksById.get(taskId)?.worktree?.directory ?? null;
-      const base = tasksById.get(taskId)?.sourceBranch ?? null;
-      if (!directory || base === null) return;
-      const result = await fetchCommitsAhead(host, directory, base);
+      // Evidence mode picked at check time, from the task's own shape: a
+      // worktree card counts ahead of its recorded branch, everything else
+      // counts commits newer than its session-link anchor. No evidence, no
+      // fetch (the predicate already screened, but the list may have
+      // changed since).
+      const start = tasksById.get(taskId);
+      let directory: string | null = null;
+      let query: CommitAheadQuery | null = null;
+      if (start) {
+        if (start.worktree !== null && start.sourceBranch !== null) {
+          directory = start.worktree.directory;
+          query = { base: start.sourceBranch };
+        } else if (start.sessionLinkedAt !== null) {
+          const root = projectDirectory(start.projectId);
+          if (root !== null) {
+            directory = root;
+            query = { since: start.sessionLinkedAt };
+          }
+        }
+      }
+      if (directory === null || query === null) return;
+      const result = await fetchCommitsAhead(host, directory, query);
       if (disposed) return;
       if (result === null) return; // service or git failed: silent, retry on a later event
       if (result.ahead <= 0 || result.head === null) return; // nothing ahead of the branch, or unreadable HEAD

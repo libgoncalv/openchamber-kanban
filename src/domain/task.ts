@@ -64,6 +64,17 @@ export type Task = {
    * existed.
    */
   autoDoneCommit: string | null;
+  /**
+   * When the task's session was linked, the anchor of the board's auto-done
+   * rule for session cards that run in the project root (the common case —
+   * most agents never enter a worktree): at least one commit newer than this
+   * moment proves the linked session produced work. `null` on tasks linked
+   * before this field existed (the board backfills them with `createdAt` on
+   * its next load) and on tasks whose session link was cleared, which also
+   * retires the evidence — a task no longer points at the session its
+   * commits belong to. Cleared links and worktrees follow the same rule.
+   */
+  sessionLinkedAt: number | null;
 };
 
 export type TaskDraft = {
@@ -75,7 +86,7 @@ export type TaskDraft = {
 };
 
 export type TaskPatch = Partial<
-  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes' | 'autoDoneCommit'>
+  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes' | 'autoDoneCommit' | 'sessionLinkedAt'>
 >;
 
 export const isStatus = (value: unknown): value is TaskStatus =>
@@ -195,6 +206,7 @@ export const createTask = (draft: TaskDraft, rank: number, now = Date.now(), id 
   updatedAt: now,
   needsAttentionSince: null,
   autoDoneCommit: null,
+  sessionLinkedAt: null,
 });
 
 export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task => {
@@ -215,6 +227,7 @@ export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task
   }
   if ('needsAttentionSince' in patch) next.needsAttentionSince = optionalTimestamp(patch.needsAttentionSince, 'needsAttentionSince');
   if ('autoDoneCommit' in patch) next.autoDoneCommit = optionalRef(patch.autoDoneCommit, 'autoDoneCommit');
+  if ('sessionLinkedAt' in patch) next.sessionLinkedAt = optionalTimestamp(patch.sessionLinkedAt, 'sessionLinkedAt');
   if ('agentNotes' in patch) {
     const notes = cleanAgentNotes(patch.agentNotes);
     if (notes !== undefined) next.agentNotes = notes;
@@ -246,6 +259,7 @@ export const parseTask = (value: unknown): Task => {
     updatedAt: cleanTimestamp(record.updatedAt, 'updatedAt'),
     needsAttentionSince: optionalTimestamp(record.needsAttentionSince, 'needsAttentionSince'),
     autoDoneCommit: optionalRef(record.autoDoneCommit, 'autoDoneCommit'),
+    sessionLinkedAt: optionalTimestamp(record.sessionLinkedAt, 'sessionLinkedAt'),
     ...cleanAgentNotesOptional(record.agentNotes),
   };
 };

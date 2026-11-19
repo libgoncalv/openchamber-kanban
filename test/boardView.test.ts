@@ -272,6 +272,24 @@ test('autoDoneCandidate gates on Review, visited, a stopped session, and somethi
   assert.equal(autoDoneCandidate(task('td', 'todo', 2, { worktree: { directory: '/wt', branch: null }, sourceBranch: 'main' }), null), false);
 });
 
+test('autoDoneCandidate takes the project-root evidence mode on a sessionLinkedAt anchor', () => {
+  // The common card: session in the project root, no worktree, no recorded branch.
+  const root = task('rd', 'review', 1, { sessionId: null, worktree: null, sourceBranch: null, sessionLinkedAt: 5000 });
+  // The anchor is the work, the same visited and stop gates still hold.
+  assert.equal(autoDoneCandidate(root, null), true, 'anchor present: a candidate even with no worktree');
+  assert.equal(autoDoneCandidate({ ...root, sessionLinkedAt: null }, null), false, 'no anchor, no worktree: stays manual');
+  assert.equal(autoDoneCandidate({ ...root, needsAttentionSince: 1000 }, null), false, 'unseen waits for a visit, root mode too');
+  // A sessionless card keeps its anchor after an unlink — the evidence window survives the link.
+  const unlinked = { ...root, sessionId: null, sessionLinkedAt: 5000 };
+  assert.equal(autoDoneCandidate(unlinked, null), true);
+  // A linked card still gates on the snapshot: unknown and running states wait, as anywhere.
+  assert.equal(autoDoneCandidate({ ...root, sessionId: 's1' }, null), false);
+  assert.equal(autoDoneCandidate({ ...root, sessionId: 's1' }, state({ activity: 'running' })), false);
+  assert.equal(autoDoneCandidate({ ...root, sessionId: 's1' }, state({ activity: 'idle', outcome: 'completed' })), true);
+  // Old records parse anchorless: they stay manual until the board's backfill lands the anchor.
+  assert.equal(autoDoneCandidate({ ...root, sessionLinkedAt: null, worktree: { directory: '/wt', branch: 'wt/a' } }, null), false, 'a worktree without a recorded branch is no evidence either');
+});
+
 test('a host-side read (unread false) settles a review row the rail can see, and keeps the ✓ muted', () => {
   const at = 100_000;
   const t = finishedReview({ needsAttentionSince: at });

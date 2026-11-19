@@ -43,6 +43,7 @@ test('adoptOrphanSession lands the card at the end of its column, linked, marker
     { status: result.task.status, rank: result.task.rank, sessionId: result.task.sessionId, projectId: result.task.projectId, needsAttentionSince: null },
     { status: 'in_progress', rank: 5000 + 1024, sessionId: 'ses_active', projectId: 'p1', needsAttentionSince: null },
   );
+  assert.equal(result.task.sessionLinkedAt, 5000, 'the anchor is the session birth, so its pre-adoption work still counts');
   const { tasks } = await loadTasks(host);
   assert.ok(tasks.find((t) => t.sessionId === 'ses_active'), 'the record is persisted');
 });

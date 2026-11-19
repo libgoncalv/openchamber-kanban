@@ -59,6 +59,11 @@ export const adoptOrphanSession = async (host: Storage, input: AdoptionInput): P
       rankAtEnd(first.tasks, input.status),
     ),
     sessionId: input.session.id,
+    // The auto-done anchor is the session's own birth, not the adoption
+    // moment: an adopted session may already have committed everything it
+    // has (the "already finished" adopt), and its work must still count —
+    // every commit the session ever made is newer than its creation.
+    sessionLinkedAt: input.session.createdAt,
     // Landing straight in Review (already finished, or needs you) is just as unseen as any other automatic move there.
     needsAttentionSince: input.status === 'review' ? Date.now() : null,
   };

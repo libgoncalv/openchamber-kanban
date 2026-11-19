@@ -61,9 +61,9 @@ Most of the time, marking Done stays exactly what it was: your click. A task nev
 - the card sits in **Review** (however it got there),
 - it has been **visited** — opened here, or its chat opened anywhere through OpenChamber,
 - its session has **stopped** (finished quietly or not running at all; a failed turn never counts),
-- and its **worktree carries commits** that are not in the branch the task branched from.
+- and there is **commit evidence**: the project carries at least one commit newer than the moment the card's session was linked — the work the session actually produced. (A card with its own worktree could instead compare against its recorded source branch, but nothing records that today; nearly every session runs in the project root.)
 
-When all of those hold, the board writes Done itself, silently: you reviewed it, the work exists. Dragging the card back out of Done is respected — it stays where you put it until a *new* commit lands. A task with no worktree, or no branch to compare against, keeps the old way: the ✓ below is its only suggestion. And if the session starts running again on a Done card — rework in the same chat — the card comes right back to **In Progress**, whatever agent runs it.
+When all of those hold, the board writes Done itself, silently: you reviewed it, the work exists. Dragging the card back out of Done is respected — it stays where you put it until a *newer* commit lands in the project. A card without a session anchor keeps the old way: the ✓ below is its only suggestion. Unlinking the session retires the anchor too — the evidence belongs to that chat. And if the session starts running again on a Done card — rework in the same chat — the card comes right back to **In Progress**, whatever agent runs it.
 
 ### "Looks done" — a suggestion, mostly replaced by the rule above
 
@@ -71,7 +71,7 @@ When a task sits in Review, its agent has finished, and nothing has happened for
 
 The ✓ is a suggestion, in the spirit of how OpenChamber itself treats finished sessions. A click on the ✓ is simply a faster way for you to mark it Done (it stays where it is in the column order). If a new agent turn starts, the ✓ disappears immediately, because the quiet is over. Once the task has been seen — here, or anywhere its chat opens — the ✓ turns quiet too: it only appears when you hover the card.
 
-For tasks the auto-done rule cannot qualify (no worktree, no source branch to compare against, a failed turn), the ✓ is the whole suggestion: the board stays out of it, and Done remains your click.
+For tasks the auto-done rule cannot qualify (no session anchor — never linked, or unlinked later — or a failed turn), the ✓ is the whole suggestion: the board stays out of it, and Done remains your click.
 
 ### Tasks can also appear by themselves
 

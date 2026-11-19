@@ -96,3 +96,58 @@ test('commits-ahead stays host-only and requires the bearer like every git route
     },
   );
 });
+
+// ---- The project-root evidence mode: commits newer than the session-link anchor ----
+
+/** Pins the exact `--since` date format the route composes: git's space-separated ISO in UTC. */
+const sinceIsoUtc = (ms: number): string => {
+  const iso = new Date(ms).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} +0000`;
+};
+
+test('commits-ahead answers since mode with the same shape, counting commits newer than the anchor', async () => {
+  const anchor = 1795_051_680_000;
+  await withServer(
+    countingGit([{ ok: true, stdout: '4\n' }, { ok: true, stdout: 'def456abc\n' }]),
+    async (get, calls) => {
+      const answer = await get(`/commits-ahead?directory=/proj&since=${anchor}`);
+      assert.deepEqual(answer, { status: 200, json: { ahead: 4, head: 'def456abc' } });
+      assert.deepEqual(calls, [
+        { directory: '/proj', args: ['rev-list', '--count', `--since=${sinceIsoUtc(anchor)}`, 'HEAD'] },
+        { directory: '/proj', args: ['rev-parse', 'HEAD'] },
+      ]);
+    },
+  );
+  await withServer(
+    countingGit([{ ok: true, stdout: '0\n' }, { ok: true, stdout: 'def456abc\n' }]),
+    async (get) => {
+      const answer = await get(`/commits-ahead?directory=/proj&since=${anchor}`);
+      assert.deepEqual(answer, { status: 200, json: { ahead: 0, head: 'def456abc' } }, 'no commits since the anchor is simply not a candidate');
+    },
+  );
+});
+
+test('commits-ahead takes exactly one evidence mode, and a bad since never reaches git', async () => {
+  await withServer(
+    countingGit([]),
+    async (get, calls) => {
+      assert.equal((await get('/commits-ahead?directory=/proj')).status, 400, 'neither mode');
+      assert.equal((await get('/commits-ahead?directory=/proj&base=main&since=1795050000000')).status, 400, 'both modes');
+      assert.equal((await get('/commits-ahead?directory=/proj&since=-5')).status, 400);
+      assert.equal((await get('/commits-ahead?directory=/proj&since=5abc')).status, 400, 'a digit run only');
+      assert.equal((await get('/commits-ahead?directory=/proj&since=12345678901234567')).status, 400, 'more digits than any real epoch');
+      assert.equal((await get('/commits-ahead?directory=/proj&since=')).status, 400, 'an empty since is the neither-mode case');
+      assert.deepEqual(calls, [], 'nothing reaches git');
+    },
+  );
+});
+
+test('commits-ahead passes git failures through in since mode too', async () => {
+  await withServer(
+    countingGit([{ ok: false, status: 422, error: 'not a git repository' }]),
+    async (get) => {
+      const answer = await get('/commits-ahead?directory=/proj&since=1795050000000');
+      assert.deepEqual(answer, { status: 422, json: { error: 'not a git repository' } });
+    },
+  );
+});

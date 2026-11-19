@@ -50,6 +50,21 @@ const BODY_MAX = 131_072;
  */
 const COMMIT_BASE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
+/**
+ * What a `since` may be for the commits-ahead route: a plain digit run, at
+ * most 15 digits (epoch milliseconds fits in 13 until the year 33658), so
+ * `parseInt` can never reinterpret a crafted prefix. The route turns it
+ * into git's space-separated ISO date in UTC, a format its parser takes
+ * verbatim, never a shell or composite.
+ */
+const SINCE_MS_PATTERN = /^\d{1,15}$/;
+
+/** Epoch milliseconds to the ISO-like date git's `--since` parses exactly: `2026-11-18 10:00:00 +0000`. */
+const sinceIsoUtc = (ms: number): string => {
+  const iso = new Date(ms).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} +0000`;
+};
+
 const readBody = (req: http.IncomingMessage): Promise<string | null> =>
   new Promise((resolve) => {
     let size = 0;
@@ -159,15 +174,34 @@ export const createServiceServer = ({ token, git, transcriber, agent }: ServiceD
 
         if (req.method === 'GET' && url.pathname === '/commits-ahead') {
           const directory = url.searchParams.get('directory') ?? '';
-          const base = url.searchParams.get('base') ?? '';
-          // The base becomes one argv element in `<base>..HEAD`, so it must be
-          // a plain ref: no leading dash (an arg, not a ref), no `..` inside
-          // (this is the range's left side), and only ref-ish characters.
-          if (!path.isAbsolute(directory) || !COMMIT_BASE_PATTERN.test(base) || base.includes('..')) {
+          const base = url.searchParams.get('base');
+          const since = url.searchParams.get('since');
+          // Exactly one evidence mode: the worktree's base ref, or the
+          // project root's link anchor. Anything else is bad request.
+          if (!path.isAbsolute(directory) || (base === null) === (since === null)) {
             json(res, 400, { error: 'bad-request' });
             return;
           }
-          const count = await git(directory, ['rev-list', '--count', `${base}..HEAD`]);
+          let countArgs: string[];
+          if (base !== null) {
+            // The base becomes one argv element in `<base>..HEAD`, so it must
+            // be a plain ref: no leading dash (an arg, not a ref), no `..`
+            // inside (this is the range's left side), and only ref-ish
+            // characters.
+            if (!COMMIT_BASE_PATTERN.test(base) || base.includes('..')) {
+              json(res, 400, { error: 'bad-request' });
+              return;
+            }
+            countArgs = ['rev-list', '--count', `${base}..HEAD`];
+          } else {
+            const sinceRaw = since!;
+            if (!SINCE_MS_PATTERN.test(sinceRaw)) {
+              json(res, 400, { error: 'bad-request' });
+              return;
+            }
+            countArgs = ['rev-list', '--count', `--since=${sinceIsoUtc(Number.parseInt(sinceRaw, 10))}`, 'HEAD'];
+          }
+          const count = await git(directory, countArgs);
           if (!count.ok) {
             json(res, count.status, { error: count.error });
             return;
