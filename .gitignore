@@ -3,3 +3,7 @@ node_modules/
 *.log
 *.local
 .DS_Store
+
+# Understand-Anything analysis data (regenerable, stays local)
+.ua/
+.understand-anything/
