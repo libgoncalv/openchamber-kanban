@@ -52,7 +52,7 @@
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@openchamber/sdk": "2.7.2",
+    "@openchamber/sdk": "2.8.0",
     "sherpa-onnx-linux-x64": "2.0.1",
     "sherpa-onnx-node": "2.0.1"
   },

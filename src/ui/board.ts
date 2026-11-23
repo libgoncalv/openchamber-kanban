@@ -58,7 +58,20 @@ const SYNC_OPTIONS = DEFAULT_SYNC_OPTIONS;
  * place in a rail surface — the agent-status writer and link reconciliation. Rendering and shared mutations come from `kanbanView` and
  * `taskOps`, so the two surfaces can never disagree on look or ordering.
  */
-export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { microphoneSupported?: boolean }) => {
+/**
+ * Where this board's frame is drawn: `phone` and `tablet` are the app's touch
+ * layouts, `desktop` everything else. `undefined` for hosts without the field
+ * counts as desktop here — the phone-specific start behavior below is a
+ * workaround for touch-shell surfaces, and an unknown host is served by the
+ * desktop proven path.
+ */
+export type BoardDeviceFormFactor = 'phone' | 'tablet' | 'desktop';
+
+export const mountKanbanBoard = (
+  host: BoardHost,
+  root: Element,
+  options?: { microphoneSupported?: boolean; deviceFormFactor?: () => BoardDeviceFormFactor },
+) => {
   injectStyles();
   root.replaceChildren();
 
@@ -1072,6 +1085,25 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         render();
         // The explicit navigation, deliberately deferred until everything above is
         // safely saved — see the comment on `navigation: 'preserve'` above.
+        const fill = chatPromptForTask({ title, description });
+        const onPhone = options?.deviceFormFactor?.() === 'phone';
+        if (onPhone) {
+          // On the phone shell the compose goes in BEFORE the navigation, for
+          // everything the post-open fill cannot cover there: `openSession`
+          // hands the shell over to the new chat (its switch commit rides the
+          // host's own view transition), and that hand-over tears this page
+          // down — the immediate post-open write races the teardown through
+          // the guest bridge and the settled write never runs from a dead
+          // page, so the one pending-input slot arrives at the new chat's
+          // editor empty and the loss is silent. Composed now, while the page
+          // is provably alive, the slot holds the description before the
+          // navigation is even requested: the slot has no session identity
+          // (the guest wire cannot target one), and the phone layout keeps no
+          // second composer mounted while the board page is up, so no editor
+          // can consume the write into some other chat — the new chat's
+          // editor takes it on mount, however late its view commits.
+          void host.prompt({ text: fill }).catch(() => undefined);
+        }
         try {
           await host.openSession(result.sessionId);
         } catch (error) {
@@ -1092,8 +1124,11 @@ export const mountKanbanBoard = (host: BoardHost, root: Element, options?: { mic
         // one pending-input slot, which is how the expanded panel could lose
         // the fill while the rail always won; `fillComposerAfterOpen` writes
         // now and once more once the switch has settled. A fill provably
-        // gone says so; the text stays safe on the task either way.
-        fillComposerAfterOpen(host, chatPromptForTask({ title, description }), {
+        // gone says so; the text stays safe on the task either way. On the
+        // phone this pair only ever acts as the recovery it is on desktop —
+        // the page usually dies at the open above, and the pre-open compose
+        // already carries the fill.
+        fillComposerAfterOpen(host, fill, {
           onLost: () => {
             void host.toast({ kind: 'info', message: `The chat was created but its composer wasn't filled — the description is still on the task "${title}".` }).catch(() => undefined);
           },
