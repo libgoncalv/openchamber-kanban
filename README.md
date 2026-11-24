@@ -26,11 +26,16 @@ All your data stays on your own OpenChamber server. This extension does not send
 
 
 
-<img width="1577" height="993" alt="Screenshot 2026-10-15 at 4 02 10 PM" src="https://github.com/user-attachments/assets/c738c32b-fd31-4c46-bcd1-1b450f98d45e" />
-<img width="1557" height="870" alt="Screenshot 2026-10-15 at 4 01 49 PM" src="https://github.com/user-attachments/assets/02899ebb-71da-4d9a-9a8a-c609de1a7ef1" />
+<img width="1600" alt="The full Kanban board: project filter, live badge, Archive button, and the five live columns" src="docs/img/board.jpg" />
+
+A linked Review card's detail dialog: the fields, the Status strip, the agent's wrap-up note, and Start Agent.
+
+<img width="1600" alt="A task's detail dialog over the board" src="docs/img/task-detail.jpg" />
 
 
 ### The sidebar panel: the project at a glance
+
+<img width="400" alt="The rail panel: the five sections stacked, each row with the ✓ and the chat affordance (a clear plus on a card with no chat, the chat's bubble on a linked one)" src="docs/img/rail.jpg" />
 
 The narrow Kanban panel next to your session list shows the same board laid out for a narrow column, locked to the project OpenChamber currently has open. The five live columns appear stacked from top to bottom, each header showing its count and carrying its column's colored strip. Retired work shows on no board: a card the board retires simply leaves, and the page's toolbar (the expanded panel shares it) carries the Archive button that opens the retired list. On the full page the scope is a filter you can change; here it follows the open project.
 
@@ -67,6 +72,8 @@ Most of the time, marking Done stays exactly what it was: your click. A task nev
 When all of those hold, the board writes Done itself, silently: you reviewed it, the work exists. Dragging the card back out of Done is respected — it stays where you put it until a *newer* commit lands in the project. A card without a session anchor keeps the old way: the ✓ below is its only suggestion. Unlinking the session retires the anchor too — the evidence belongs to that chat. And if the session starts running again on a Done card — rework in the same chat — the card comes right back to **In Progress**, whatever agent runs it.
 
 ### Archive — the door to the retired list
+
+<img width="900" alt="The archive dialog: the retired card with its archived-on date, a quick Restore, the armed Delete, and the Empty purge" src="docs/img/archive.jpg" />
 
 A card that sits in **Done** for two weeks the board retires on its own, with no click: it leaves every board. The page's toolbar carries an **Archive button** (with a live count that never misses a crossing, thanks to the board's timer) and opens the archive dialog: the retired cards, oldest first, with three moves. Tap a card to open its detail — edit, session link, any move, notes. A quick **Restore** returns it to Done; the two-week clock restarts, so a card you still value gets its window again. A two-press **Delete** removes it, and the header's **Empty** purges the whole list with the same armed, second-press confirm. The clock started when the card entered Done; rework pulled it back out and it landed in Done again? The two weeks count again, from the fresh entry. A reworked *archived* card behaves like a reworked Done card too — a running session pulls it back to In Progress, and only you put it back, or the fresh Done stretch ages into Archive again.
 

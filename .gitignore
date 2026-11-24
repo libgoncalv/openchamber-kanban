@@ -7,3 +7,6 @@ node_modules/
 # Understand-Anything analysis data (regenerable, stays local)
 .ua/
 .understand-anything/
+
+# OpenChamber per-project data (screenshot captures etc.), regenerable, stays local
+.openchamber/

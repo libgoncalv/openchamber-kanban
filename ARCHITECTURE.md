@@ -97,9 +97,14 @@ openchamber-kanban/
     main.js             # esbuild Node/ESM output of src/service/main.ts (sherpa-onnx-node stays external)
   test/                 # node:test unit tests for domain/, store/, host/, plus the service HTTP routes
   scripts/build.mjs      # esbuild: browser IIFE for panel/page, Node/ESM for the service
+  scripts/mock-host.mjs  # the screenshot harness (see "The screenshot harness" below)
 ```
 
 Layering: `domain/` has no SDK or DOM imports — pure functions, fully unit-tested. `store/` and `host/` depend only on narrow `Pick<HostClient, …>` slices, tested with in-memory fakes. `ui/` is the only layer that touches the DOM.
+
+### The screenshot harness
+
+`scripts/mock-host.mjs` serves the built panel over loopback inside a fake OpenChamber frame: an outer page plays the host side of the SDK guest wire (`hello` → `ready` with this repo's real theme tokens — the app's default "openchamber-light" palette, resolved through the app's own tint/contrast derivation — workspace-subscribe pushes for projects/sessions/worktrees, storage get/set over an in-memory map seeded with a sample board that covers every column, pill state and the rail's two affordances, and an empty agent journal for `service-request`). `node scripts/mock-host.mjs`, then open `/mock/page`, `/mock/page?openTask=1` (auto-opens the detail dialog) or `/mock/panel` (the rail at a fixed 400px width); `&device=phone|desktop` sets the ready context's form factor. The harness is deliberately read-only — prompt/openSession are acknowledged as no-ops and `startSession` refuses — so clicking in it starts nothing real. The README's `docs/img/` screenshots are captured from it (via the browser panel's `resize` + `capture`); regenerate them after any UI change. Fragile by design: the envelopes ride the SDK's channel constants, which are duplicated inline — track an SDK channel/version bump there.
 
 ## Task data model
 
