@@ -3,8 +3,9 @@ import { mountBadge, mountBanner, mountMenu, mountSelect, mountSpinner } from '@
 import { applyPatch, DEFAULT_TASK_TITLE, STATUSES, STATUS_LABELS, type Task, type TaskPatch, type TaskStatus } from '../domain/task.ts';
 import { ALL_PROJECTS, NO_PROJECT, archiveCandidates, nextArchiveTickAt, planStatusMoves, type BoardFilter } from '../domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen, liveStateFor, nextLooksDoneTickAt, type BoardSections } from '../domain/boardView.ts';
-import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove, autoDoneMove } from '../store/taskOps.ts';
+import { createBacklogTask, deleteTaskWithDismissal, deleteTasksWithDismissal, patchTask, planMove, saveMove, statusMove } from '../store/taskOps.ts';
 import { adoptOrphanSession } from '../store/adoptOps.ts';
+import { applyAutoDone, applyObservedRead } from '../store/autoDoneOps.ts';
 import { createTitlePromotion } from '../host/titlePromotion.ts';
 import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/taskStore.ts';
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
@@ -45,7 +46,9 @@ export type BoardHost = Pick<
  * Done (a click, drag, or the ✓), and the board's auto-done rule
  * (`autoDoneReady`-shaped conditions in `boardView.ts`, checked by
  * `autoDoneSync` below) after a visited Review card's worktree shows commits
- * ahead of its source branch. Archived is a third shape of Done-write —
+ * ahead of its source branch — the rule's writes living in
+ * `store/autoDoneOps.ts`, reached by the rail's own watcher the same way
+ * this page reaches them. Archived is a third shape of Done-write —
  * the archive rule below: a card two weeks in Done is the board's alone to
  * retire, no click, no commits.
  */
@@ -354,21 +357,24 @@ export const mountKanbanBoard = (
     (projectId) => (projectId === null ? null : projects.find((p) => p.id === projectId)?.directory ?? null),
     {
       onAutoDone: (taskId, commitSha) => {
-        const task = tasks.find((t) => t.id === taskId);
-        if (!task) return;
-        const updated = autoDoneMove(task, commitSha);
-        if (!updated) return;
-        setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
-        render();
-        void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
+        // The write is the shared op (`store/autoDoneOps.ts`) — the fresh
+        // read re-checks what is actually stored before saving, so a check
+        // that raced another surface's write lands on storage truth, and
+        // this view converges on the moved record either way.
+        void (async () => {
+          const moved = await applyAutoDone(host, taskId, commitSha);
+          if (!moved || disposed) return;
+          setTasks(tasks.map((t) => (t.id === taskId ? moved : t)));
+          render();
+        })().catch((error) => { notify(error); void reload(); });
       },
       onObservedRead: (taskId) => {
-        const task = tasks.find((t) => t.id === taskId);
-        if (!task || task.needsAttentionSince === null) return;
-        const updated = applyPatch(task, { needsAttentionSince: null });
-        setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
-        render();
-        void saveTask(host, updated).catch((error) => { notify(error); void reload(); });
+        void (async () => {
+          const updated = await applyObservedRead(host, taskId);
+          if (!updated || disposed) return;
+          setTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
+          render();
+        })().catch((error) => { notify(error); void reload(); });
       },
     },
   );

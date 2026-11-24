@@ -86,14 +86,19 @@ export type AutoDoneSyncCallbacks = {
  * chat was read elsewhere). No timers: every input to the rule arrives
  * through one of those two channels, and the commit evidence is
  * fetch-per-candidate rather than a poll.
- * Two writes, both the board page's through its callbacks (the page stays
- * the single status writer; the rail never writes and inherits the same
- * view):
+ * Two writes, through the caller's callbacks (both the shared ops in
+ * `store/autoDoneOps.ts` since the rail learned the rule; the agent-status
+ * writes of `sessionSync.ts` remain the page's alone):
  *  - a storeless one — the marker clear for a visit the host observed
  *    elsewhere, so badges and unseen counts converge on next load;
  *  - the real one — Done, guarded by the HEAD hash at fire time: while the
  *    task's `autoDoneCommit` equals the worktree HEAD, nothing re-fires,
  *    so dragging the card back out of Done holds until newer work lands.
+ *
+ * Since `store/autoDoneOps.ts`, both writes are shared ops the rail's own
+ * watcher reaches too (one implementation, like adoption) — the comments
+ * below say "the page" where the history is the page's; the rule itself is
+ * every open surface's.
  *
  * Errors are silent the board's background-sync way: a failed check hides
  * behind the retry floor and the next change re-tries it, never a toast.

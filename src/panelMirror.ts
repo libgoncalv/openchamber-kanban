@@ -4,6 +4,7 @@ import { loadTasks, saveTask, saveTaskRetrying } from './store/taskStore.ts';
 import { statusMove } from './store/taskOps.ts';
 import { adoptOrphanSession } from './store/adoptOps.ts';
 import { applyAgentJournal } from './store/agentApply.ts';
+import { applyAutoDone, applyObservedRead } from './store/autoDoneOps.ts';
 import { createTitlePromotion } from './host/titlePromotion.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from './store/orphanWatermark.ts';
 import { loadDismissedSessions } from './store/dismissedSessions.ts';
@@ -13,6 +14,7 @@ import { badgeForCounts, buildBoardView, countOpen, countUnseen } from './domain
 import { applyPatch, STATUS_LABELS, newTaskId, type Task, type TaskStatus } from './domain/task.ts';
 import { DEFAULT_SYNC_OPTIONS } from './domain/sync.ts';
 import { createSessionSync } from './host/sessionSync.ts';
+import { createAutoDoneSync } from './host/autoDoneSync.ts';
 import { watchOrphanSessions } from './host/orphanSessions.ts';
 import { pushMirror } from './host/agentChannel.ts';
 import { describeHostError, projectForDirectory } from './host/workspace.ts';
@@ -94,6 +96,7 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
     tasks = [...next];
     const visible = visibleTasksForProject(tasks, currentProject?.id ?? null);
     sessionSync.sync(visible);
+    autoDoneSync.sync(visible);
     titlePromotion.sync(visible);
   };
 
@@ -106,7 +109,7 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
    * passes here could ever save anything.
    */
   const sessionSync = createSessionSync(host, DEFAULT_SYNC_OPTIONS, null, undefined, {
-    onLiveChange: () => { if (everLoaded && !disposed) { titlePromotion.evaluate(); render(); } },
+    onLiveChange: () => { if (everLoaded && !disposed) { autoDoneSync.evaluate(); titlePromotion.evaluate(); render(); } },
     onSnapshot: () => {
       // Storage has no change push: outside writes (the board saving a drag,
       // a move, an edit) arrive on the next session snapshot tick or on this
@@ -114,6 +117,47 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       scheduleReload();
     },
   });
+
+  /**
+   * The page's own auto-done rule and its observed-read write, run here
+   * through the same shared ops (`store/autoDoneOps.ts`): a Review card the
+   * host reports as read elsewhere clears its marker, and a visited,
+   * committed, quiet one lands Done — while only this rail is open, the
+   * same conclusion the page draws when it is. The watcher's inputs are the
+   * same two channels the board's are: this surface's visible tasks and
+   * the shared live map (fed on every `applyTasks` and on every trusted
+   * snapshot, plus the idle pass's reload), so nothing of the rule is a
+   * board-only sweep anymore. The commit check is best-effort exactly as
+   * on the page — the service may be unapproved or absent, a failed check
+   * just waits behind the retry floor — and Done keeps its guard: the same
+   * HEAD never fires the rule twice.
+   */
+  const autoDoneSync = createAutoDoneSync(
+    host,
+    () => sessionSync.live(),
+    (projectId) => (projectId === null ? null : projects.find((p) => p.id === projectId)?.directory ?? null),
+    {
+      onAutoDone: (taskId, commitSha) => {
+        void (async () => {
+          const moved = await applyAutoDone(host, taskId, commitSha);
+          if (!moved || disposed) return;
+          applyTasks(tasks.map((t) => (t.id === taskId ? moved : t)));
+          if (everLoaded) render();
+          // This surface's write: the mirror doc goes up so agents read the
+          // card's Done.
+          scheduleMirrorPush();
+        })().catch(() => undefined); // the watcher's retry floor spaces the next attempt; silent like the page's failed checks
+      },
+      onObservedRead: (taskId) => {
+        void (async () => {
+          const updated = await applyObservedRead(host, taskId);
+          if (!updated || disposed) return;
+          applyTasks(tasks.map((t) => (t.id === taskId ? updated : t)));
+          if (everLoaded) render();
+        })().catch(() => undefined);
+      },
+    },
+  );
 
   /**
    * The page's title promotion, run here so a card adopted while only this
@@ -593,6 +637,7 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       stopDirectory();
       orphanWatcher?.dispose();
       sessionSync.dispose();
+      autoDoneSync.dispose();
       titlePromotion.dispose();
       board?.dispose();
     },
