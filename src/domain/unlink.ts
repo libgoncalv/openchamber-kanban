@@ -26,8 +26,9 @@ export type WorktreesView = {
 
 /**
  * Whether a linked session still exists. An archived session (`archivedAt`)
- * is reported separately from a deleted session so callers can keep or delete
- * the task appropriately. An absent one counts as deleted only when the snapshot finished loading and,
+ * is reported separately from a deleted session so a caller's message can say
+ * which happened — the link is cleared either way, never the task. An absent
+ * one counts as deleted only when the snapshot finished loading and,
  * for the directory the session was last seen in, coverage finished too:
  * a session missing from a snapshot that hasn't read its directory yet
  * proves nothing. `directory` is `null` when unknown, in which case every

@@ -286,8 +286,7 @@ export const mountKanbanBoard = (
 
   /**
    * Clears one link on a task (its session, or its worktree) after the thing
-   * it points at was deleted or archived on the host. Session deletion uses
-   * deleteTaskForGoneSession instead. The state and save are unconditional —
+   * it points at was deleted or archived on the host. The state and save are unconditional —
    * the caller checked the guard — but every caller updates its own state
    * synchronously first, so a repeated report is a no-op.
    * `message` null means stay quiet (reconciliation reports one summary
@@ -306,34 +305,17 @@ export const mountKanbanBoard = (
   };
 
   /**
-   * A task's linked session was deleted or archived from the sidebar. A
-   * deleted session removes the task; an archived session only clears the
-   * link, so the card no longer claims a session that "Open Chat" cannot open.
+   * A task's linked session was deleted or archived from the sidebar. Either
+   * way only the link is cleared — deleting a chat in the sidebar must never
+   * delete the card — so the card no longer claims a session that "Open
+   * Chat" cannot open, and stays a plain unstarted card able to Start Agent
+   * or Link an existing session fresh. Only the wording says which happened.
    */
-  const deleteTaskForGoneSession = (taskId: string, message: string | null): boolean => {
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return false;
-    void deleteTask(host, task.id)
-      .then(() => {
-        if (prefs.openTaskId === task.id) void persistOpenTask(null);
-        if (message) void host.toast({ kind: 'info', message }).catch(() => undefined);
-      })
-      .catch((error) => { notify(error); void reload(); });
-    setTasks(tasks.filter((candidate) => candidate.id !== task.id));
-    if (prefs.openTaskId === task.id) { detail?.dispose(); detail = null; }
-    render();
-    return true;
-  };
-
   const onSessionGone = (taskId: string, sessionId: string, reason: SessionGoneReason) => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task || task.sessionId !== sessionId) return;
-    if (reason === 'deleted') {
-      deleteTaskForGoneSession(taskId, `Deleted "${task.title}" — its session was deleted.`);
-    } else {
-      // The anchor dies with the link, so a stale window can never fire the auto-done rule on a session that is gone.
-      clearTaskLink(taskId, { sessionId: null, sessionLinkedAt: null }, `Unlinked "${task.title}" — its session was archived.`);
-    }
+    // The anchor dies with the link, so a stale window can never fire the auto-done rule on a session that is gone.
+    clearTaskLink(taskId, { sessionId: null, sessionLinkedAt: null }, `Unlinked "${task.title}" — its session was ${reason}.`);
   };
 
   /** A task's worktree was deleted from the sidebar; the recorded worktree no longer points anywhere. */
@@ -1165,7 +1147,6 @@ export const mountKanbanBoard = (
     }));
     if (disposed) return;
     let cleared = 0;
-    let deleted = 0;
     for (const result of results) {
       if (disposed) return;
       if (result.status !== 'fulfilled') continue;
@@ -1180,9 +1161,9 @@ export const mountKanbanBoard = (
         if (!current || current.projectId !== projectId) continue;
         if (current.sessionId) {
           const sessionState = sessionLinkState(current.sessionId, null, sessionsView);
-          if (sessionState === 'deleted') {
-            if (deleteTaskForGoneSession(current.id, null)) deleted += 1;
-          } else if (sessionState === 'archived') {
+          // A deleted session unlinks exactly like an archived one — the card
+          // is kept either way, only the wording differs; 'unknown' clears nothing.
+          if (sessionState === 'deleted' || sessionState === 'archived') {
             if (clearTaskLink(current.id, { sessionId: null, sessionLinkedAt: null }, null)) cleared += 1;
           }
         }
@@ -1191,11 +1172,8 @@ export const mountKanbanBoard = (
         }
       }
     }
-    if (cleared > 0 || deleted > 0) {
-      const parts = [];
-      if (deleted > 0) parts.push(`deleted ${deleted} task${deleted === 1 ? '' : 's'}`);
-      if (cleared > 0) parts.push(`cleared ${cleared} stale link${cleared === 1 ? '' : 's'}`);
-      void host.toast({ kind: 'info', message: `${parts.join(' and ')} — the session or worktree behind ${parts.length === 1 && deleted > 0 ? 'it' : 'them'} no longer exists.` }).catch(() => undefined);
+    if (cleared > 0) {
+      void host.toast({ kind: 'info', message: `Cleared ${cleared} stale link${cleared === 1 ? '' : 's'} — the session or worktree behind ${cleared === 1 ? 'it' : 'them'} no longer exists.` }).catch(() => undefined);
     }
   };
 
@@ -1270,8 +1248,10 @@ export const mountKanbanBoard = (
       else clearBanner();
       render();
       // Stale links (a session or worktree deleted while this board was closed)
-      // are cleared before the orphan watcher starts, so a session whose link
-      // is about to be dropped can never also be re-adopted as a duplicate.
+      // are cleared before the orphan watcher starts, so the watcher opens on
+      // post-cleanup truth and no adoption decision is ever made against a
+      // link reconcile has just dropped. Nothing cleared here can come back:
+      // a deleted session no longer exists, an archived one is never adoptable.
       await reconcileLinks();
       // Agent journal next, same reasoning: what lands here saves through the
       // same task records the adoption watcher reads, and any pending creates
