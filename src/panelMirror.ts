@@ -417,7 +417,7 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
   });
 
   const foot = el('div', 'kb-rail-foot');
-  foot.append(el('p', 'kb-muted', 'Two quick actions live here — the ✓ marks a task Done, and the chat button opens the linked chat of a card (starting one attached to it when there is none). Everything else (open, move, edit, delete) is the full board, one click away: pull this panel wider, or the Extension pages menu.'));
+  foot.append(el('p', 'kb-muted', 'Two quick actions live here — the ✓ marks a task Done, and the chat button opens the linked chat of a card; on a card with none it shows a plain plus and starts one attached to it. Everything else (open, move, edit, delete) is the full board, one click away: pull this panel wider, or the Extension pages menu.'));
   wrap.append(foot);
   root.append(wrap);
 

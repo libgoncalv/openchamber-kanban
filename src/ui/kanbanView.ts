@@ -71,23 +71,27 @@ export type KanbanView = {
 /**
  * The icon set for the small square buttons (the same 24-viewBox style the
  * dictation panel uses — `.kb-dict-iconbtn`'s idiom, reused by `.kb-iconbtn`):
- * a check for "mark done", a speech bubble for "open chat", the same bubble
- * with a plus cut out for "new chat", and a trash can for the column head's
- * "empty column".
+ * a check for "mark done", a speech bubble for "open chat", a plain bold plus
+ * for "new chat" — a cut-out inside the bubble shrank the actual plus to a few
+ * pixels at rail size, so the create state draws as its own glyph — and a
+ * trash can for the column head's "empty column".
  */
 const CHECK_DONE_PATH = 'M10 15.172l9.192-9.193 1.415 1.414L10 18l-6.364-6.364 1.414-1.414z';
 const CHAT_PATH =
   'M20 2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4l4 4 3-4h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z';
-/** The start-of-a-chat glyph: the bubble with a plus punched out of its fill ("evenodd"). */
-const NEW_CHAT_PATH = `${CHAT_PATH} M9.25 5.75h1.5v6.5H9.25z M6.75 8.25h6.5v1.5H6.75z`;
+/** The start-of-a-chat glyph: one bold plus as a single cross polygon. A
+ *  single loop on purpose — the helper hardcodes `fill-rule: evenodd`, and two
+ *  overlapping bars would hollow the center square out. */
+const NEW_CHAT_PATH = 'M10.5 4.5h3v6h6v3h-6v6h-3v-6h-6v-3h6z';
 const TRASH_PATH =
   'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z';
 const svgGlyph = (path: string): SVGElement => {
   const node = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   node.setAttribute('viewBox', '0 0 24 24');
   node.setAttribute('fill', 'currentColor');
-  // evenodd is what makes the new-chat glyph's plus a hole in the bubble
-  // fill; for plain single-loop glyphs it matches nonzero exactly.
+  // Every glyph this helper draws today is a single loop, for which evenodd
+  // matches nonzero exactly (the old bubble-plus needed the rule for its
+  // punched-out plus; the new-chat glyph keeps the discipline by being one).
   node.setAttribute('fill-rule', 'evenodd');
   node.setAttribute('aria-hidden', 'true');
   const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -244,8 +248,8 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     // that chat (any status — its history is worth opening; a Done or
     // archived card carries none of the other affordances but keeps this
     // one); on an unlinked card that could receive one (a project to run in,
-    // not Done or Archive) the plus-cut glyph starts a chat attached to the
-    // card instead. Always visible like the ✓ (a finger has no hover); on an
+    // not Done or Archive) the plain plus starts a chat attached to the card
+    // instead. Always visible like the ✓ (a finger has no hover); on an
     // attention row the button wears the filled primary tint so the way in
     // to the waiting chat is unmistakable.
     if (rail && handlers.onChat && (task.sessionId || (task.projectId && item.displayStatus !== 'done' && item.displayStatus !== 'archived'))) {
