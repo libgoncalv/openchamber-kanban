@@ -388,7 +388,7 @@ export const mountKanbanView = (root: Element, surface: KanbanSurface, handlers:
     head.className = 'kb-psec-head';
     if (head instanceof HTMLButtonElement) head.type = 'button';
     head.append(el('span', 'kb-psec-name', STATUS_LABELS[status]));
-    const count = el('span', 'kb-psec-count', '0');
+    const count = el('span', 'kb-psec-count', String(items.length));
     if (items.some((entry) => entry.attention && entry.displayStatus !== 'done' && entry.displayStatus !== 'archived')) count.dataset.attn = 'true';
     head.append(count);
     if (collapsible) {
