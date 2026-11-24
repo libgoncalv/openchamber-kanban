@@ -7,19 +7,21 @@ import { AGENT_JOURNAL_MAX, parseJournalEntry, type AgentJournalEntry, type Mirr
  * (`OPENCHAMBER_SERVICE_DATA_DIR` — the host creates and deletes it with the
  * extension). Two files:
  *
- * - `mirror.json` — the last task summary the board pushed. The service holds
- *   no host.storage access, so agents read whatever the board last pushed.
- * - `journal.jsonl` — accepted agent writes, one line each, waiting for a
- *   board load to apply them into host.storage. The board page is the only
- *   writer of tasks and is often closed; the service process may also stop
- *   (idle), so the journal must be on disk, not in memory.
+ * - `mirror.json` — the last task summary a surface pushed. The service
+ *   holds no host.storage access, so agents read whatever was last pushed.
+ * - `journal.jsonl` — accepted agent writes, one line each, waiting for an
+ *   open surface to apply them into host.storage (`store/agentApply.ts`,
+ *   the rail and the page alike; the service process itself may also stop
+ *   idle, so the journal must be on disk, not in memory).
  *
  * Writes serialize through one promise chain (the practical concurrency here
  * is a handful of agents); every full rewrite is atomic (temp file + rename).
- * A crash between append and ack can replay an entry — the board acks by id
- * and a replayed create would be a duplicate card, so ack-before-rewrite is
- * the ordering that matters: entries are removed from the file only after the
- * board confirmed it applied them.
+ * A crash between append and ack can replay an entry, and the stamps the
+ * apply writes on the records it creates (`agentEntryIds`) make that replay
+ * safe everywhere else — this file's ordering still matters, it just no
+ * longer leans on the caller: entries are removed from the file only after
+ * a surface confirmed it applied them (ack-before-rewrite), so the file
+ * never shrinks on a promise.
  */
 export type AgentStore = {
   readMirror: () => Promise<MirrorDoc | null>;

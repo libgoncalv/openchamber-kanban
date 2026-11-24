@@ -482,7 +482,7 @@ var parseBody2 = (body) => {
   }
 };
 var newEntryId = () => `a_${randomBytes(16).toString("hex")}`;
-var createAgentTaskRoutes = ({ store, notifyChange }) => {
+var createAgentTaskRoutes = ({ store, notifyChange, notifyBoardChange }) => {
   const handle = async (method, pathname, body, scope) => {
     if (!pathname.startsWith("/agent/")) return null;
     const isHost = scope === "host";
@@ -492,6 +492,12 @@ var createAgentTaskRoutes = ({ store, notifyChange }) => {
       const doc = parsed ? parseMirrorDoc(parsed) : null;
       if (doc === null) return fail2(400, "Request body must be a mirror document");
       await store.writeMirror(doc);
+      if (notifyBoardChange) {
+        try {
+          notifyBoardChange();
+        } catch {
+        }
+      }
       return ok2({ saved: true, tasks: doc.tasks.length });
     }
     if (pathname === "/agent/pending" && method === "GET") {
@@ -573,7 +579,7 @@ var createAgentTaskRoutes = ({ store, notifyChange }) => {
       const count2 = await store.pendingCount().catch(() => 0);
       return fail2(
         429,
-        `The board has ${count2} pending agent changes it has not applied yet \u2014 open the Kanban page once so the board catches up, then retry.`
+        `The journal has ${count2} pending agent changes it has not applied yet \u2014 open any Kanban surface (the panel or the page) so it catches up, then retry.`
       );
     }
     const count = await store.pendingCount().catch(() => 0);
@@ -624,7 +630,7 @@ var json = (res, status, body) => {
 };
 var createServiceServer = ({ token: token2, git: git2, transcriber, agent: agent2 }) => {
   const transcribe = createTranscribeRoutes(transcriber);
-  const agentRoutes = agent2 ? createAgentTaskRoutes({ store: agent2.store, notifyChange: agent2.notifyChange }) : null;
+  const agentRoutes = agent2 ? createAgentTaskRoutes({ store: agent2.store, notifyChange: agent2.notifyChange, notifyBoardChange: agent2.notifyBoardChange }) : null;
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname === "/health") {
@@ -928,11 +934,17 @@ var createAgentChannel = async (dataDir2, port2) => {
     });
   }
   let serviceHost = null;
-  const notifyChange = (pendingCount) => {
+  const ensureServiceHost = () => {
     if (!serviceHost) serviceHost = createServiceHost({ env: process.env });
-    void serviceHost.emit("kanban-agent-change", { pendingCount }).catch(() => void 0);
+    return serviceHost;
   };
-  return { token: agentToken, store, notifyChange };
+  const notifyChange = (pendingCount) => {
+    void ensureServiceHost().emit("kanban-agent-change", { pendingCount }).catch(() => void 0);
+  };
+  const notifyBoardChange = () => {
+    void ensureServiceHost().emit("kanban-board-change", {}).catch(() => void 0);
+  };
+  return { token: agentToken, store, notifyChange, notifyBoardChange };
 };
 var agent = null;
 if (dataDir) {

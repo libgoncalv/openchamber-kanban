@@ -28,6 +28,8 @@ export type ServiceAgent = {
   store: AgentStore;
   /** Fired after an accepted agent write: the host's `emit`, so an open board refreshes without waiting for its own poll. */
   notifyChange?: (pendingCount: number) => void;
+  /** Fired after an accepted mirror push: the host's `emit`, so open surfaces converge on a board-side write without waiting for their poll. */
+  notifyBoardChange?: () => void;
 };
 
 export type ServiceDeps = {
@@ -103,7 +105,7 @@ const json = (res: http.ServerResponse, status: number, body: unknown): void => 
  */
 export const createServiceServer = ({ token, git, transcriber, agent }: ServiceDeps): http.Server => {
   const transcribe = createTranscribeRoutes(transcriber);
-  const agentRoutes = agent ? createAgentTaskRoutes({ store: agent.store, notifyChange: agent.notifyChange }) : null;
+  const agentRoutes = agent ? createAgentTaskRoutes({ store: agent.store, notifyChange: agent.notifyChange, notifyBoardChange: agent.notifyBoardChange }) : null;
 
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');

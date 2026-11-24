@@ -31,7 +31,7 @@ const fakeStore = (full = false): AgentStore => {
 const transcriber: Transcriber = { transcribe: async () => 'fake' };
 
 const withServer = async (
-  agent: { token: string; store: AgentStore } | null,
+  agent: { token: string; store: AgentStore; notifyChange?: (pendingCount: number) => void; notifyBoardChange?: () => void } | null,
   run: (requester: Requester) => Promise<void>,
 ) => {
   const server = createServiceServer({
@@ -148,7 +148,26 @@ test('a journal left full by the board answers 429 with what to do', async () =>
     await call('PUT', '/agent/mirror', { v: 1, savedAt: 1, projects: [], tasks: [] }, HOST);
     const refused = await call('POST', '/agent/tasks', { title: 't' }, AGENT);
     assert.equal(refused.status, 429);
-    assert.match(refused.json.error, /open the Kanban page/i);
+    assert.match(refused.json.error, /open any Kanban surface/i);
+  });
+});
+
+test('a mirror push fires the board-change emit; agent writes fire the pending-count emit', async () => {
+  const boardChanges: number[] = [];
+  const agentChanges: number[] = [];
+  await withServer({
+    token: AGENT,
+    store: fakeStore(),
+    notifyChange: (count) => agentChanges.push(count),
+    notifyBoardChange: () => boardChanges.push(1),
+  }, async (call) => {
+    await call('PUT', '/agent/mirror', { v: 1, savedAt: 5, projects: [], tasks: [] }, HOST);
+    assert.equal(boardChanges.length, 1, 'every accepted push signals the open surfaces');
+    assert.equal((await call('PUT', '/agent/mirror', { nonsense: true }, HOST)).status, 400);
+    assert.equal(boardChanges.length, 1, 'a refused push signals nothing');
+    await call('POST', '/agent/tasks', { title: 'From an agent', directory: '/repo' }, AGENT);
+    assert.equal(agentChanges.length, 1);
+    assert.equal(agentChanges[0], 1);
   });
 });
 

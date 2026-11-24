@@ -10,7 +10,7 @@ import { deleteTask, loadTasks, saveTask, saveTaskRetrying } from '../store/task
 import { loadPrefs, savePrefs, type Prefs } from '../store/prefs.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from '../store/orphanWatermark.ts';
 import { loadDismissedSessions, saveDismissedSessions } from '../store/dismissedSessions.ts';
-import { describeHostError, fetchProjects, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
+import { describeHostError, fetchSessions, fetchWorktrees, watchProjects } from '../host/workspace.ts';
 import { createSessionSync } from '../host/sessionSync.ts';
 import { createWorktreeSync } from '../host/worktreeSync.ts';
 import { createAutoDoneSync } from '../host/autoDoneSync.ts';
@@ -21,9 +21,9 @@ import { sessionLinkState, worktreeLinkState, type SessionGoneReason, type Sessi
 import { EXTENSION_ID, chatPromptForTask, taskUrl } from '../domain/chatLink.ts';
 import { sessionTitleForTask } from '../domain/autoTask.ts';
 import { resolveTaskWorktree } from '../domain/worktree.ts';
-import { planPendingApply } from '../domain/agentChannel.ts';
 import { newTaskId } from '../domain/task.ts';
-import { ackPendingEntries, fetchPendingEntries, pushMirror } from '../host/agentChannel.ts';
+import { pushMirror } from '../host/agentChannel.ts';
+import { applyAgentJournal } from '../store/agentApply.ts';
 import { mountTaskDetail } from './detail.ts';
 import { createDictation } from '../host/dictation.ts';
 import { mountKanbanView } from './kanbanView.ts';
@@ -403,11 +403,13 @@ export const mountKanbanBoard = (
   // ---- The agent channel: mirror push + journal apply ----
   // How an OpenCode agent in one of this board's projects reads tasks and
   // queues changes (see domain/agentChannel.ts). The service has no
-  // host.storage access and the board is the only writer, so the channel is
-  // two directions of best-effort sync: the mirror (reads, pushed debounced
-  // after every change) and the journal (writes, pulled on every load and on
-  // the service's live emit). Everything here degrades silently — the
-  // extension may run without a service at all.
+  // host.storage access and the journal's one apply lives in
+  // `store/agentApply.ts`, shared with the rail mirror — any open surface
+  // applies it. The channel is two directions of best-effort sync: the
+  // mirror (reads, pushed debounced after every change) and the journal
+  // (writes, pulled on every load and on the service's live emit).
+  // Everything here degrades silently — the extension may run without a
+  // service at all.
 
   /**
    * The mirror push is debounced (a burst of saves is one push) and skipped
@@ -435,80 +437,55 @@ export const mountKanbanBoard = (
   };
 
   /**
-   * Applies what agents queued while the board was closed — or just now, live
-   * (the service's `emit` lands here when a frame is open). One pure plan,
-   * then exactly the changed records saved with per-entry independence (one
-   * failure keeps only its own entry pending, retried by the next pull —
-   * the id acks remove only what provably landed, so a replay can never
-   * duplicate). A total service failure is silent: the channel is optional
-   * and the board's next load re-pulls.
+   * Applies what agents queued while nothing was open — or just now, live
+   * (the service's `emit` lands here when a frame is open). The write
+   * itself is one op shared with the rail mirror (`store/agentApply.ts`):
+   * a fresh-read plan (never this list's own state, so another surface's
+   * moment-ago write is never clobbered), per-entry saves with
+   * independence (one failure keeps only its own entry pending, retried by
+   * the next pull), and same-instant convergence on the entry stamps, so
+   * two open surfaces pulling the same journal never duplicate a card. This
+   * caller owns the presentation: converging its list on the outcome, the
+   * "From an agent" toast (a converged-away twin announces nothing — the
+   * winning call's toast is the one that tells the story), and the failure
+   * banner. A lost ack costs nothing beyond the journal still listing the
+   * entry — the stamps make the next pull answer `alreadyLanded`, so no
+   * reload and no recursion here. A total service
+   * failure is silent: the channel is optional and the next load or event
+   * re-pulls.
    */
   let applyingAgentPending = false;
   const applyAgentPending = async (): Promise<void> => {
     if (applyingAgentPending || disposed) return;
     applyingAgentPending = true;
     try {
-      const entries = await fetchPendingEntries(host);
-      if (entries === null || entries.length === 0) return;
-      // The live list is the resolver of record for agent-created projects;
-      // before the watcher's first snapshot lands, ask once (same
-      // resolve/release pattern as the other one-off fetches).
-      const knownProjects = projects.length > 0
-        ? projects
-        : (await fetchProjects(host).catch(() => ({ projects: [] as GuestProject[] }))).projects;
-      // A plan failure (a stale journal can hold what today's validation
-      // refuses) must not kill an event-driven pull unhandled: stay quiet,
-      // keep the entries pending, let the next Refresh — which answers
-      // through its own error surface — retry them.
-      let plan;
-      try { plan = planPendingApply(entries, tasks, knownProjects, newTaskId, Date.now()); }
-      catch {
-        showBanner('An agent change could not be read', 'The queued entries stay pending — Refresh retries them.', 'warning');
-        return;
-      }
-      const createResults = await Promise.allSettled(plan.creates.map((entry) => saveTask(host, entry.task)));
-      const noteResults = await Promise.allSettled(plan.notes.map((note) => saveTask(host, note.task)));
-      const okCreates = plan.creates.filter((_, index) => createResults[index]?.status === 'fulfilled');
-      const okNotes = plan.notes.filter((_, index) => noteResults[index]?.status === 'fulfilled');
-      const failedCount = createResults.length + noteResults.length - okCreates.length - okNotes.length;
-      if (okCreates.length > 0 || okNotes.length > 0 || plan.dropped.length > 0) {
-        const acked = await ackPendingEntries(host, [
-          ...okCreates.map((entry) => entry.entryId),
-          ...okNotes.flatMap((note) => note.entryIds),
-          ...plan.dropped,
-        ]);
-        if (!acked) {
-          // The entries stay pending, so the next pull re-plans them — the
-          // creates would then be applied twice. Re-plan-time dedupe cannot
-          // know which ids landed, so treat a failed ack as a failed apply:
-          // reload from storage, which holds the truth.
-          void reload();
-          return;
-        }
-      }
-      if (okCreates.length > 0 || okNotes.length > 0) {
-        const createdIds = new Set(okCreates.map((entry) => entry.task.id));
-        const noteById = new Map(okNotes.map((note) => [note.taskId, note.task]));
-        const stillUnknown = (id: string) => !tasks.some((t) => t.id === id);
+      const result = await applyAgentJournal(host, { projects, newId: newTaskId, now: Date.now() });
+      if (result === null) return;
+      // The applied work stands even when the ack was lost — the entry
+      // stamps make a replay answer `alreadyLanded`, never a second card,
+      // so the journal simply lists it until the next pull acks it. A
+      // reload here would re-drain through this same call and, on a
+      // persistently failing ack route, recurse — the merge above already
+      // holds this surface's truth.
+      if (result.updated.length > 0) {
+        const updatedById = new Map(result.updated.map((task) => [task.id, task]));
         setTasks(
           tasks
-            .map((task) => noteById.get(task.id) ?? task)
-            .concat(okCreates.filter((entry) => stillUnknown(entry.task.id)).map((entry) => entry.task)),
+            .map((task) => updatedById.get(task.id) ?? task)
+            .concat(result.updated.filter((task) => !tasks.some((existing) => existing.id === task.id))),
         );
         render();
       }
       const parts: string[] = [];
-      if (okCreates.length === 1) parts.push(`added "${okCreates[0]!.task.title}" (${STATUS_LABELS[okCreates[0]!.task.status]})`);
-      else if (okCreates.length > 1) parts.push(`added ${okCreates.length} tasks`);
-      if (okNotes.length === 1) {
-        const title = tasks.find((t) => t.id === okNotes[0]!.taskId)?.title ?? okNotes[0]!.taskId;
-        parts.push(`an agent left a note on "${title}"`);
-      } else if (okNotes.length > 1) parts.push(`agent notes landed on ${okNotes.length} tasks`);
+      if (result.created.length === 1) parts.push(`added "${result.created[0]!.task.title}" (${STATUS_LABELS[result.created[0]!.task.status]})`);
+      else if (result.created.length > 1) parts.push(`added ${result.created.length} tasks`);
+      if (result.noted.length === 1) parts.push(`an agent left a note on "${result.noted[0]}"`);
+      else if (result.noted.length > 1) parts.push(`agent notes landed on ${result.noted.length} tasks`);
       if (parts.length > 0) {
         void host.toast({ kind: 'info', message: `From an agent: ${parts.join(', ')}.` }).catch(() => undefined);
       }
-      if (failedCount > 0) {
-        showBanner('Some agent changes could not be applied', `${failedCount} of ${plan.creates.length + plan.notes.length} stayed queued — Refresh retries them.`, 'warning');
+      if (result.failures > 0) {
+        showBanner('Some agent changes could not be applied', `${result.failures} stayed queued — Refresh retries them.`, 'warning');
       }
     } finally {
       applyingAgentPending = false;

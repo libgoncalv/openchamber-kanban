@@ -31,8 +31,8 @@ AUTH="Authorization: Bearer $TOKEN"
 ```
 
 If the file is missing or a request is refused with `connection refused`, the
-extension is paused or the service has not started: tell the user to open the
-Kanban page once — do not retry-loop.
+extension is paused or the service has not started: tell the user to open any
+Kanban surface (the panel or the page) once — do not retry-loop.
 
 ## Routes
 
@@ -60,10 +60,10 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   that project; without a match it answers a `warning` and the task is
   created without a project.
 - `status` is `backlog` (default) or `todo`.
-- The answer is a receipt — **queued**, not created. The board applies queued
-  tasks the next time it opens, or within seconds while it is open. A
-  duplicate in that window is possible but harmless; mention it if you queued
-  many.
+- The answer is a receipt — **queued**, not created. Any open Kanban surface
+  applies queued tasks within moments (the panel and the page both drain the
+  journal; with nothing open, the queue on disk waits). Open surfaces racing
+  on the same receipt converge by entry-id stamps — never a duplicate card.
 
 **Leave a note on a task** — `POST /agent/tasks/<id>/note`:
 
@@ -96,8 +96,9 @@ see below.
   one line. A Review card with no note is a card the user has to investigate
   from scratch.
 - Ids in errors are opaque; a `404` on a note means the task id was wrong —
-  list first. A `429` means the board is behind on applying queued work:
-  opening the Kanban page once clears it, then retry.
+  list first. A `429` means the queue is behind on applying queued work:
+  opening any Kanban surface (the panel or the page) once drains it, then
+  retry.
 
 All three routes stay on this machine and carry nothing to any server beyond
 the user's own OpenChamber.

@@ -26,6 +26,9 @@ export type TaskWorktree = { directory: string; branch: string | null };
 /** One wrap-up or breakdown note an agent left on a task through the agent channel. */
 export type AgentNote = { at: number; text: string };
 
+/** How many journal entry ids one task keeps — creates carry exactly one; note folds add theirs. */
+export const AGENT_ENTRY_IDS_MAX = 64;
+
 export type Task = {
   schemaVersion: typeof TASK_SCHEMA_VERSION;
   id: string;
@@ -50,12 +53,29 @@ export type Task = {
   needsAttentionSince: number | null;
   /**
    * Wrap-up / breakdown notes agents left on this task through the agent
-   * channel (the board applies them from the service's journal). Absent on
-   * tasks that never received one — exactly like a record saved before
+   * channel (open surfaces fold them in from the service's journal).
+   * Absent on tasks that never received one — exactly like a record saved
+   * before
    * `needsAttentionSince` existed. Not a status and never saved directly by
-   * the agent: the board is the only writer, same as every other field.
+   * the agent: surface writes all run through the shared apply or the
+   * board's own ops, same as every other field.
    */
   agentNotes?: AgentNote[];
+  /**
+   * The agent-channel journal entry ids whose application this record
+   * embodies — exactly one for a create (the entry that made the card), the
+   * folded ids for agent notes. This is the idempotency key of the journal
+   * apply (`store/agentApply.ts`): two open surfaces pulling the same
+   * journal at the same instant each save their own record, and this list
+   * tells the post-save convergence which tasks are rivals for the same
+   * entry (the smallest task id survives, the adoption tie-break), and
+   * tells the next pull what already landed (acknowledged, never reapplied
+   * — the stamp also heals the "ack failed after the save" pull, which
+   * used to be able to re-create the task). Absent on tasks no agent write
+   * ever shaped — quick-created cards, records saved before the field
+   * existed.
+   */
+  agentEntryIds?: string[];
   /**
    * The commit hash in the task's worktree when the board's auto-done rule
    * wrote Done itself (see `boardView.ts`). Re-firing stays a no-op as long
@@ -101,7 +121,7 @@ export type TaskDraft = {
 };
 
 export type TaskPatch = Partial<
-  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes' | 'autoDoneCommit' | 'sessionLinkedAt' | 'doneAt'>
+  Pick<Task, 'title' | 'description' | 'status' | 'projectId' | 'sourceBranch' | 'worktree' | 'sessionId' | 'rank' | 'needsAttentionSince' | 'agentNotes' | 'agentEntryIds' | 'autoDoneCommit' | 'sessionLinkedAt' | 'doneAt'>
 >;
 
 export const isStatus = (value: unknown): value is TaskStatus =>
@@ -186,6 +206,42 @@ export const appendAgentNote = (existing: AgentNote[] | undefined, text: string,
 const cleanAgentNotesOptional = (value: unknown): { agentNotes?: AgentNote[] } =>
   value === undefined ? {} : { agentNotes: cleanAgentNotes(value) };
 
+/**
+ * Journal entry ids stamped on a task record (`agentEntryIds`): plain
+ * non-empty strings, kept unique in arrival order — the newest stamp last.
+ * The count is not validated here (the writer trims to `AGENT_ENTRY_IDS_MAX`
+ * the `appendAgentNote` way: validation never fails on overflow, the
+ * appender gives way).
+ */
+const cleanAgentEntryIds = (value: unknown): string[] | undefined => {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('agentEntryIds must be an array');
+  const ids: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string' || !raw.trim()) throw new Error('agentEntryIds entries must be non-empty strings');
+    if (raw.length > REF_MAX) throw new Error('agentEntryIds entry is too long');
+    if (!ids.includes(raw)) ids.push(raw);
+  }
+  return ids;
+};
+
+/** For `parseTask`: absent stamps add nothing; present ones validate, and a broken one fails the record. */
+const cleanAgentEntryIdsOptional = (value: unknown): { agentEntryIds?: string[] } =>
+  value === undefined ? {} : { agentEntryIds: cleanAgentEntryIds(value) };
+
+/**
+ * Adds one journal entry id to a task's stamp list — pure, the note-fold
+ * appender's sibling: unique (a re-folded entry stamps nothing new), newest
+ * last, and past the cap the oldest give way, so the newest wrap-up's ids
+ * always stay present.
+ */
+export const appendAgentEntryId = (existing: string[] | undefined, entryId: string): string[] => {
+  const source = existing ?? [];
+  if (source.includes(entryId)) return source;
+  const merged = [...source, entryId];
+  return merged.length > AGENT_ENTRY_IDS_MAX ? merged.slice(merged.length - AGENT_ENTRY_IDS_MAX) : merged;
+};
+
 const cleanWorktree = (value: unknown): TaskWorktree | null => {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'object') throw new Error('worktree must be an object');
@@ -257,6 +313,11 @@ export const applyPatch = (task: Task, patch: TaskPatch, now = Date.now()): Task
     if (notes !== undefined) next.agentNotes = notes;
     else delete next.agentNotes;
   }
+  if ('agentEntryIds' in patch) {
+    const ids = cleanAgentEntryIds(patch.agentEntryIds);
+    if (ids !== undefined) next.agentEntryIds = ids;
+    else delete next.agentEntryIds;
+  }
   return next;
 };
 
@@ -286,5 +347,6 @@ export const parseTask = (value: unknown): Task => {
     sessionLinkedAt: optionalTimestamp(record.sessionLinkedAt, 'sessionLinkedAt'),
     doneAt: optionalTimestamp(record.doneAt, 'doneAt'),
     ...cleanAgentNotesOptional(record.agentNotes),
+    ...cleanAgentEntryIdsOptional(record.agentEntryIds),
   };
 };

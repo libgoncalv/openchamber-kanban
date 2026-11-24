@@ -173,3 +173,45 @@ test('notes fold onto their task; unknown tasks drop with an ack; a note storm k
   assert.equal(many.notes[0]!.task.agentNotes?.length, 5);
   assert.equal(many.notes[0]!.task.agentNotes?.[0]!.text, 'note 0');
 });
+
+test('creates stamp their entry id; note folds stamp theirs, keeping earlier stamps', () => {
+  const seedTask = { ...makeTask('t_aaa'), agentEntryIds: ['a_early1'] };
+  const plan = planPendingApply(
+    [entry({ id: 'a_new1', projectId: 'p1', status: 'todo' }), noteEntry({ id: 'a_note1', taskId: 't_aaa', text: ' done ' })],
+    [seedTask],
+    [{ id: 'p1', directory: '/repo' }],
+    () => 't_newab12',
+    2000,
+  );
+  assert.deepEqual(plan.creates[0]!.task.agentEntryIds, ['a_new1'], 'a create says which entry shaped it');
+  const folded = plan.notes[0]!.task;
+  assert.equal(folded.agentNotes?.length, 1);
+  assert.deepEqual(
+    folded.agentEntryIds,
+    ['a_early1', 'a_note1'],
+    'the fold appends its entry after the stamps the record already carries',
+  );
+});
+
+test('entries the fresh read says landed plan no write and ack as alreadyLanded', () => {
+  const stamped = { ...makeTask('t_aaa'), agentEntryIds: ['a_1', 'a_n1'] };
+  const plan = planPendingApply(
+    [
+      entry({ id: 'a_1', projectId: 'p1', status: 'todo' }),
+      noteEntry({ id: 'a_n1', taskId: 't_aaa' }),
+      entry({ id: 'a_2', projectId: 'p1', status: 'todo' }),
+      noteEntry({ id: 'a_n2', taskId: 't_aaa' }),
+    ],
+    [stamped],
+    [],
+    () => 't_x',
+    5000,
+    new Set(['a_1', 'a_n1']),
+  );
+  assert.equal(plan.creates.length, 1, 'only the unstamped create plans a write');
+  assert.equal(plan.creates[0]!.entryId, 'a_2');
+  assert.equal(plan.notes.length, 1);
+  assert.deepEqual(plan.notes[0]!.entryIds, ['a_n2']);
+  assert.equal(plan.notes[0]!.task.agentNotes?.length, 1, 'the already-folded note is not folded twice');
+  assert.deepEqual(plan.alreadyLanded, ['a_1', 'a_n1'], 'the replayed entries are ack-worthy without a write');
+});

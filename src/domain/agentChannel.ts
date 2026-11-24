@@ -1,5 +1,5 @@
 import { rankAtEnd } from './board.ts';
-import { AGENT_NOTE_MAX, AGENT_NOTES_MAX, DESCRIPTION_MAX, TITLE_MAX, appendAgentNote, applyPatch, createTask, type Task, type TaskStatus } from './task.ts';
+import { AGENT_NOTE_MAX, AGENT_NOTES_MAX, DESCRIPTION_MAX, TITLE_MAX, appendAgentEntryId, appendAgentNote, applyPatch, createTask, type Task, type TaskStatus } from './task.ts';
 
 /**
  * The agent channel: how an agent (an OpenCode session in one of the board's
@@ -7,11 +7,12 @@ import { AGENT_NOTE_MAX, AGENT_NOTES_MAX, DESCRIPTION_MAX, TITLE_MAX, appendAgen
  * local service, not through any host API. The wire has three parts, all
  * defined here as pure data and functions:
  *
- * - the **mirror** — the board pushes a serializable summary of its tasks to
- *   the service (the service has no host.storage access); agents read it;
+ * - the **mirror** — any open surface pushes a serializable summary of its
+ *   tasks to the service (the service has no host.storage access); agents
+ *   read it;
  * - the **journal** — accepted agent writes, appended to the service's data
- *   dir. The board is the only writer of host.storage and may be closed, so
- *   agent writes wait in the journal until a board load applies them
+ *   dir. Every open Kanban surface applies this journal through one shared
+ *   op (`store/agentApply.ts`); when none is open the writes simply wait
  *   (`emit` reaches open frames only — "nothing replays" — hence the file);
  * - the **agent task view** — what `GET /agent/tasks` answers: the mirror's
  *   tasks dressed with their project name and directory.
@@ -250,12 +251,21 @@ export const projectForDirectory = resolveDirectoryToProject;
 // ---- Applying the journal (board side) ----
 
 export type PendingApplyPlan = {
-  /** Fresh tasks to save; `task` carries the board-minted id computed at plan time. */
+  /** Fresh tasks to save; `task` carries the board-minted id computed at plan time, and stamps its creating entry id (`agentEntryIds`). */
   creates: Array<{ entryId: string; task: Task }>;
-  /** Per task (notes folded in sequence), the updated task and the entries that produced it. */
+  /** Per task (notes folded in sequence), the updated task and the entries that produced it; the fold stamps those entry ids too. */
   notes: Array<{ entryIds: string[]; taskId: string; task: Task }>;
   /** Entry ids ack-worthy without any write: a note naming a task that no longer exists. */
   dropped: string[];
+  /**
+   * Entry ids ack-worthy without any write because their work is already in
+   * storage: another open surface applied this journal moments ago and
+   * stamped the entry ids on its task. The apply's idempotency key —
+   * reapplying these would duplicate a card or a note, so they are only
+   * acknowledged. Same applies to note entries whose task exists but whose
+   * stamp is already there.
+   */
+  alreadyLanded: string[];
 };
 
 /**
@@ -265,7 +275,9 @@ export type PendingApplyPlan = {
  * projects resolve against the board's live project list first (the entry's
  * service-time pick when that is still among them), then the entry's
  * directory, then `null` — the task lands unplaced rather than misplaced.
- * Nothing here writes; the caller owns saves, acks, state and toasts.
+ * `appliedEntryIds` is the fresh reader's book: entry ids already stamped on
+ * a stored task never plan a write, they only ack. Nothing here writes; the
+ * caller owns saves, acks, state and toasts.
  */
 export const planPendingApply = (
   entries: readonly AgentJournalEntry[],
@@ -273,28 +285,36 @@ export const planPendingApply = (
   projects: readonly { id: string; directory: string | null }[],
   newId: () => string,
   now: number,
+  appliedEntryIds: ReadonlySet<string> = new Set<string>(),
 ): PendingApplyPlan => {
   const known = new Set(projects.map((project) => project.id));
   const creates: PendingApplyPlan['creates'] = [];
   const noteTargets = new Map<string, { entryIds: string[]; texts: Array<{ at: number; text: string }> }>();
   const dropped: string[] = [];
+  const alreadyLanded: string[] = [];
   for (const entry of entries) {
+    if (appliedEntryIds.has(entry.id)) { alreadyLanded.push(entry.id); continue; }
     if (entry.kind === 'create') {
       const projectId = typeof entry.projectId === 'string' && known.has(entry.projectId)
         ? entry.projectId
         : resolveDirectoryToProject(projects.map((project) => ({ id: project.id, name: '', directory: project.directory })), entry.directory);
       creates.push({
         entryId: entry.id,
-        task: createTask(
-          { title: entry.title, description: entry.description, projectId, status: entry.status },
-          // Appended at the target column's end, the same place a
-          // quick-created task lands. Rank is plan-time state; a concurrent
-          // user move may have shifted ranks since — the same benign race
-          // every adoption already tolerates.
-          rankAtEnd(tasks, entry.status),
-          now,
-          newId(),
-        ),
+        task: {
+          ...createTask(
+            { title: entry.title, description: entry.description, projectId, status: entry.status },
+            // Appended at the target column's end, the same place a
+            // quick-created task lands. Rank is plan-time state; a concurrent
+            // user move may have shifted ranks since — the same benign race
+            // every adoption already tolerates.
+            rankAtEnd(tasks, entry.status),
+            now,
+            newId(),
+          ),
+          // The idempotency stamp: whatever surface's record wins the
+          // post-save convergence, it says which entry shaped it.
+          agentEntryIds: [entry.id],
+        },
       });
     } else {
       const task = tasks.find((candidate) => candidate.id === entry.taskId);
@@ -312,11 +332,17 @@ export const planPendingApply = (
       (existing, note) => appendAgentNote(existing, note.text, note.at),
       current.agentNotes,
     );
+    // The fold stamps every entry that landed here, so a replay (the ack
+    // lost, the pull repeated) folds nothing twice.
+    const stamped = target.entryIds.reduce(
+      (existing, entryId) => appendAgentEntryId(existing, entryId),
+      current.agentEntryIds,
+    );
     notes.push({
       entryIds: target.entryIds,
       taskId,
-      task: applyPatch(current, { agentNotes: merged }),
+      task: applyPatch(current, { agentNotes: merged, agentEntryIds: stamped }),
     });
   }
-  return { creates, notes, dropped };
+  return { creates, notes, dropped, alreadyLanded };
 };

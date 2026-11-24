@@ -73,11 +73,17 @@ const createAgentChannel = async (dataDir: string, port: number) => {
     });
   }
   let serviceHost: ReturnType<typeof createServiceHost> | null = null;
-  const notifyChange = (pendingCount: number) => {
+  const ensureServiceHost = () => {
     if (!serviceHost) serviceHost = createServiceHost({ env: process.env });
-    void serviceHost.emit('kanban-agent-change', { pendingCount }).catch(() => undefined);
+    return serviceHost;
   };
-  return { token: agentToken, store, notifyChange };
+  const notifyChange = (pendingCount: number) => {
+    void ensureServiceHost().emit('kanban-agent-change', { pendingCount }).catch(() => undefined);
+  };
+  const notifyBoardChange = () => {
+    void ensureServiceHost().emit('kanban-board-change', {}).catch(() => undefined);
+  };
+  return { token: agentToken, store, notifyChange, notifyBoardChange };
 };
 
 let agent: Awaited<ReturnType<typeof createAgentChannel>> | null = null;

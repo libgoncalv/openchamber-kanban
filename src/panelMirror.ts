@@ -3,16 +3,18 @@ import { mountBadge } from '@openchamber/sdk/ui';
 import { loadTasks, saveTask, saveTaskRetrying } from './store/taskStore.ts';
 import { statusMove } from './store/taskOps.ts';
 import { adoptOrphanSession } from './store/adoptOps.ts';
+import { applyAgentJournal } from './store/agentApply.ts';
 import { createTitlePromotion } from './host/titlePromotion.ts';
 import { loadOrphanWatermark, saveOrphanWatermark } from './store/orphanWatermark.ts';
 import { loadDismissedSessions } from './store/dismissedSessions.ts';
 import { buildLinkPatch, buildStartSessionRequest, chatPromptForTask } from './domain/chatLink.ts';
 import { ALL_PROJECTS, matchesFilter } from './domain/board.ts';
 import { badgeForCounts, buildBoardView, countOpen, countUnseen } from './domain/boardView.ts';
-import { applyPatch, STATUS_LABELS, type Task, type TaskStatus } from './domain/task.ts';
+import { applyPatch, STATUS_LABELS, newTaskId, type Task, type TaskStatus } from './domain/task.ts';
 import { DEFAULT_SYNC_OPTIONS } from './domain/sync.ts';
 import { createSessionSync } from './host/sessionSync.ts';
 import { watchOrphanSessions } from './host/orphanSessions.ts';
+import { pushMirror } from './host/agentChannel.ts';
 import { describeHostError, projectForDirectory } from './host/workspace.ts';
 import { fillComposerAfterOpen } from './host/promptFill.ts';
 import { mountKanbanView } from './ui/kanbanView.ts';
@@ -21,7 +23,7 @@ import { el } from './ui/dom.ts';
 
 export type MirrorHost = Pick<
   HostClient,
-  'storage' | 'onProjects' | 'onSessions' | 'onDirectory' | 'openSession' | 'startSession' | 'prompt' | 'toast'
+  'storage' | 'onProjects' | 'onSessions' | 'onDirectory' | 'onServiceEvent' | 'serviceRequest' | 'openSession' | 'startSession' | 'prompt' | 'toast'
 >;
 
 /**
@@ -38,7 +40,16 @@ export type MirrorHost = Pick<
  * here, without the board ever opening — it is an import, never a regroup —
  * and the title promotion that follows it (`host/titlePromotion.ts`): a
  * card the adoption titled with a placeholder takes the session's
- * agent-generated name the moment the live map carries one.
+ * agent-generated name the moment the live map carries one. The agent
+ * channel joined them (`store/agentApply.ts`): the mirror pulls and applies
+ * the queued journal on the service's emit, on its idle pass, and once after
+ * its first load — agent-queued tasks and wrap-up notes land while only the
+ * rail is open; an import, never a regroup. It also pushes the mirror doc
+ * (`host/agentChannel.ts`'s `pushMirror`) after the writes that changed its
+ * list, so an agent reading `GET /agent/tasks` sees the board as it is, and
+ * the service's `kanban-board-change` emit reaches it, so a write from any
+ * board surface (a drag, the auto-done rule) re-reads storage within the
+ * debounce instead of waiting for the low-cadence pass.
  * What the mirror does update by itself is what it shows: live agent state
  * per linked session, regrouped for display only — where a row sits marks
  * the move the board will persist the next time it opens.
@@ -122,6 +133,9 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       onPromoted: (task) => {
         applyTasks(tasks.map((t) => (t.id === task.id ? task : t)));
         if (everLoaded) render();
+        // This surface's write (the promotion was this mount's): the mirror
+        // doc goes up so agents read the real name.
+        scheduleMirrorPush();
       },
       onStale: (task) => {
         const shown = tasks.find((t) => t.id === task.id);
@@ -195,6 +209,9 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
         if (result === null || disposed) return;
         applyTasks(tasks.filter((t) => t.id !== result.task.id).concat(result.task));
         if (everLoaded) render();
+        // This surface's import write: the mirror doc goes up so agents see
+        // the card they may be about to look for.
+        scheduleMirrorPush();
         if (result.adopted) {
           void host.toast({ kind: 'info', message: `Added "${result.task.title}" to the board (${STATUS_LABELS[status]}) — found a session running with no task.` }).catch(() => undefined);
         }
@@ -361,10 +378,95 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
   root.append(wrap);
 
   badge = mountBadge(badgeSlot, { label: '', tone: 'neutral' });
-  // Storage has no change push outside the session snapshots: this low
-  // cadence pass covers the idle case, so a display-only surface never goes
-  // stale either.
-  intervalId = window.setInterval(() => { void reload(); }, 30_000);
+
+  // ---- The agent channel, the mirror's side ----
+  // The board's channel, shared ops and all (`store/agentApply.ts`): the
+  // journal's queue applies whenever this surface is open — on the service's
+  // emit, on the low-cadence pass below, and once right after the first
+  // load — so agent-queued tasks and wrap-up notes land with no board ever
+  // opened; an import, never a regroup. This surface's presentations: the
+  // toast when something lands (the same "From an agent" wording the board
+  // uses), a quiet standing line when entries keep failing instead of a
+  // toast per retried pass, and the mirror doc push below after its own
+  // writes landed.
+  let channelBusy = false;
+  const channelPass = async () => {
+    if (disposed || channelBusy) return;
+    channelBusy = true;
+    try {
+      const result = await applyAgentJournal(host, { projects, newId: newTaskId, now: Date.now() });
+      if (result === null) {
+        // The service is down or the journal empty — the storage poll below
+        // still runs either way: this pass is the idle refresh too.
+      } else {
+        // A landing pass says so in a toast (the board's own wording), then
+        // pushes the mirror doc it just changed. Persistent failures draw a
+        // quiet standing line under the header instead of a toast per retried
+        // pass; a failure-free pass clears it.
+        if (result.applied) {
+          const parts: string[] = [];
+          if (result.created.length === 1) parts.push(`added "${result.created[0]!.task.title}" (${STATUS_LABELS[result.created[0]!.task.status]})`);
+          else if (result.created.length > 1) parts.push(`added ${result.created.length} tasks`);
+          if (result.noted.length === 1) parts.push(`an agent left a note on "${result.noted[0]}"`);
+          else if (result.noted.length > 1) parts.push(`agent notes landed on ${result.noted.length} tasks`);
+          if (parts.length > 0) {
+            void host.toast({ kind: 'info', message: `From an agent: ${parts.join(', ')}.` }).catch(() => undefined);
+          }
+          scheduleMirrorPush();
+        }
+        if (result.failures > 0) {
+          statusEl.textContent = result.failures === 1
+            ? '1 agent change could not be applied — it stays queued and retries automatically.'
+            : `${result.failures} agent changes could not be applied — they stay queued and retry automatically.`;
+          statusEl.hidden = false;
+        } else {
+          statusEl.hidden = true;
+        }
+      }
+    } finally {
+      channelBusy = false;
+    }
+    // Storage truth after every pass — this pass's own writes, entries another
+    // surface already landed, a board write racing the same emit — one reload
+    // covers the whole outcome.
+    await reload();
+  };
+  let channelTimer: number | undefined;
+  const scheduleChannelWork = () => {
+    if (channelTimer !== undefined || disposed) return;
+    channelTimer = window.setTimeout(() => { channelTimer = undefined; void channelPass(); }, 300);
+  };
+  const stopServiceEvents = host.onServiceEvent((event) => {
+    // The service's queue got an agent write — or a board surface pushed the
+    // mirror right after writing (its `kanban-board-change`): either way this
+    // surface drains what is queued and re-reads storage within the debounce,
+    // instead of waiting for the low-cadence pass.
+    if (event.topic !== 'kanban-agent-change' && event.topic !== 'kanban-board-change') return;
+    scheduleChannelWork();
+  });
+  // Storage has no change push outside the session snapshots and this
+  // channel: the pass is both the journal pull and the idle refresh, so a
+  // display-only surface never goes stale either.
+  intervalId = window.setInterval(() => { void channelPass(); }, 30_000);
+
+  // ---- The mirror doc's push ----
+  // Same debounced, projects-guarded push the board runs (`pushMirrorNow`
+  // there): after a write this surface made land (a journal apply, an
+  // adoption, a title promotion) the doc goes up, so agents reading
+  // `GET /agent/tasks` see the board as it is while only the rail is open.
+  let mirrorTimer: number | undefined;
+  let mirrorInFlight = false;
+  const scheduleMirrorPush = () => {
+    if (mirrorTimer !== undefined || disposed) return;
+    mirrorTimer = window.setTimeout(() => {
+      mirrorTimer = undefined;
+      if (disposed) return;
+      if (mirrorInFlight) { scheduleMirrorPush(); return; }
+      if (projects.length === 0) return;
+      mirrorInFlight = true;
+      void pushMirror(host, tasks, projects).finally(() => { mirrorInFlight = false; });
+    }, 500);
+  };
 
   let stopProjects: (() => void) | null = null;
   void host.onProjects((snapshot) => {
@@ -373,6 +475,10 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
     resolveCurrentProject();
     applyTasks(tasks);
     if (everLoaded) render();
+    // The first snapshot is what makes a mirror worth pushing (it carries the
+    // per-task project name and directory an agent maps itself against) — the
+    // tasks themselves may not have changed since the last debounced push.
+    scheduleMirrorPush();
   }).then((stop) => { if (disposed) stop(); else stopProjects = stop; }, () => undefined);
 
   // `onDirectory` replays the freshest value at subscribe time, so a mount
@@ -409,6 +515,10 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       // frame's other mode (the board, mounting after a swap) always has
       // exactly one live adopter per open surface.
       orphanWatcher = watchOrphanSessions(host, excludedSessionIds, (found) => adoptRunningSession(found.projectId, found.session, found.status));
+      // The first drain, right after the first load: entries the journal has
+      // been holding since the last surface closed land now, with nothing
+      // more open than this rail.
+      void channelPass();
     } catch (error) {
       statusEl.textContent = `Could not load tasks — ${describeHostError(error)}`;
     }
@@ -430,7 +540,10 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
     } catch (error) {
       // Transient storage failures keep the last view on screen; only a first
       // load that never succeeded has nothing better to show than the reason.
-      if (!everLoaded) statusEl.textContent = `Could not load tasks — ${describeHostError(error)}`;
+      if (!everLoaded) {
+        statusEl.textContent = `Could not load tasks — ${describeHostError(error)}`;
+        statusEl.hidden = false;
+      }
     } finally {
       reloading = false;
     }
@@ -473,6 +586,9 @@ export const mountKanbanMirror = (host: MirrorHost, root: Element, options?: { d
       disposed = true;
       if (intervalId !== undefined) window.clearInterval(intervalId);
       if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
+      if (channelTimer !== undefined) window.clearTimeout(channelTimer);
+      if (mirrorTimer !== undefined) window.clearTimeout(mirrorTimer);
+      stopServiceEvents();
       stopProjects?.();
       stopDirectory();
       orphanWatcher?.dispose();

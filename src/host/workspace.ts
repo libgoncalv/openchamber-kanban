@@ -10,13 +10,17 @@ export const watchProjects = async (host: WorkspaceHost, listener: (state: Proje
 
 export type ProjectsResult = { complete: boolean; projects: GuestProject[] };
 
+type OnProjectsHost = Pick<HostClient, 'onProjects'>;
+
 /**
  * One-off project list — same resolve/release shape as `fetchSessions`. The
  * board keeps a live list from `watchProjects`; this covers the window before
  * that first snapshot (an agent-journal pull on the very first load needs
- * real project directories to place agent-created tasks).
+ * real project directories to place agent-created tasks). Takes only the
+ * `onProjects` it reads, so any host that has a project subscription at all
+ * can ask it (the shared journal apply included).
  */
-export const fetchProjects = (host: WorkspaceHost, timeoutMs = 8000): Promise<ProjectsResult> =>
+export const fetchProjects = (host: OnProjectsHost, timeoutMs = 8000): Promise<ProjectsResult> =>
   new Promise((resolve, reject) => {
     let last: { state: string; projects: GuestProject[] } | null = null;
     let settled = false;
